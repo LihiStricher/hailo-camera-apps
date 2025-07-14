@@ -174,13 +174,12 @@ shared_library('mspn_post',
 ################################################
 # FACIAL LANDMARKING SOURCES
 ################################################
-
-facial_landmarks_post_sources = [
-    'facial_landmarking/tddfa_mobilenet.cpp',
+mediapipe_landmarks_post_sources = [
+    'facial_landmarking/mediapipe_landmarks_post.cpp',
 ]
 
 shared_library('facial_landmarks_post',
-    facial_landmarks_post_sources,
+    mediapipe_landmarks_post_sources,
     cpp_args : hailo_lib_args,
     include_directories: [hailo_general_inc, include_directories('./')] + xtensor_inc,
     dependencies : post_deps,
@@ -327,7 +326,25 @@ shared_library('face_recognition_post',
     install_dir: post_proc_install_dir,
 )
 
+################################################
+# CLIP SOURCES
+################################################
+zmq_dep = dependency('libzmq', method : 'pkg-config')
+json_dep = meson.get_compiler('cpp').find_library('libnlohmann_json_schema_validator', required: true, dirs: '/usr/lib/')
 
+clip_sources = [
+    'clip/clip.cpp',
+]
+
+shared_library('clip_post',
+    clip_sources,
+    cpp_args : hailo_lib_args,
+    include_directories: [hailo_general_inc, include_directories('./')],
+    dependencies :[tracker_dep, zmq_dep, json_dep],
+    gnu_symbol_visibility : 'default',
+    install: true,
+    install_dir: post_proc_install_dir,
+)
 
 if get_option('include_python')
     subdir('python_bindings')
