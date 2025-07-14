@@ -1,4 +1,9 @@
 {
+    "privacy_mask": {
+        "mask_type": "COLOR",
+        "pixelization_size": 60,
+        "color_value": [0, 0, 0]
+    },
     "osd": {
         "image": [
             {
@@ -17,11 +22,7 @@
             {
                 "id": "example_datetime",
                 "font_size": 100,
-                "text_color": [
-                    255,
-                    255,
-                    255
-                ],
+                "text_color": [255, 255, 255],
                 "font_path": "/usr/share/fonts/ttf/LiberationMono-Regular.ttf",
                 "x": 0.0,
                 "y": 0.93,
@@ -35,11 +36,7 @@
                 "id": "example_text1",
                 "label": "HailoAI",
                 "font_size": 80,
-                "text_color": [
-                    255,
-                    255,
-                    255
-                ],
+                "text_color": [255, 255, 255],
                 "x": 0.78,
                 "y": 0.12,
                 "z-index": 2,
@@ -51,11 +48,7 @@
                 "id": "example_text2",
                 "label": "Demo Application",
                 "font_size": 100,
-                "text_color": [
-                    255,
-                    255,
-                    255
-                ],
+                "text_color": [255, 255, 255],
                 "x": 0.0,
                 "y": 0.01,
                 "z-index": 1,
@@ -146,7 +139,7 @@
                     "enable": true,
                     "period": 1,
                     "result_output_path": "bitrate.txt",
-                    "output_result_to_file": true
+                    "output_result_to_file": false
                 },
                 "cycle_monitor": {
                     "enable": true,
