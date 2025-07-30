@@ -364,7 +364,7 @@ void create_ai_pipeline(std::shared_ptr<AppResources> app_resources)
                                                                                            TEE_STAGE, 10, false,
                                                                                            AGGREGATOR_STAGE, 5, false,
                                                                                            false, true, 0.3, 0.1,
-                                                                                           app_resources->print_fps, std::chrono::milliseconds(300));
+                                                                                           app_resources->print_fps, std::chrono::milliseconds(100));
     std::shared_ptr<PersistStage> tracker_stage = std::make_shared<PersistStage>(TRACKER_STAGE, 3, 1, false, app_resources->print_fps);
 
     /*
@@ -379,14 +379,14 @@ void create_ai_pipeline(std::shared_ptr<AppResources> app_resources)
                                                                                          TILING_AGGREGATOR_STAGE, CONVERT_STAGE, TILES,
                                                                                          5, true, app_resources->print_fps, StagePoolMode::BLOCKING);
     std::shared_ptr<DspConvertStage> convert_stage = std::make_shared<DspConvertStage>(CONVERT_STAGE, 30);
-    std::shared_ptr<FireDetectionHailortAsyncStage> clip_stage = std::make_shared<FireDetectionHailortAsyncStage>(CLIP_AI_STAGE, CLIP_HEF_FILE, 6, 50, "device0", 6, 10, 5, false,
+    std::shared_ptr<FireDetectionHailortAsyncStage> clip_stage = std::make_shared<FireDetectionHailortAsyncStage>(CLIP_AI_STAGE, CLIP_HEF_FILE, 6, 50, "device0", 6, 10, 6, false,
                                                                                                                        std::chrono::milliseconds(100), app_resources->print_fps, StagePoolMode::BLOCKING);
-    std::shared_ptr<AggregatorStage> tiling_agg_stage = std::make_shared<AggregatorStage>(TILING_AGGREGATOR_STAGE, true, 6,
+    std::shared_ptr<AggregatorStage> tiling_agg_stage = std::make_shared<AggregatorStage>(TILING_AGGREGATOR_STAGE, false, 6,
                                                                                           TILLING_STAGE, 6, true,
                                                                                           CLIP_AI_STAGE, 20, false,
                                                                                           true, false, 0.3, 0.1,
                                                                                           app_resources->print_fps);
-    std::shared_ptr<AggregatorStage> agg_stage = std::make_shared<AggregatorStage>(AGGREGATOR_STAGE, true, 1,
+    std::shared_ptr<AggregatorStage> agg_stage = std::make_shared<AggregatorStage>(AGGREGATOR_STAGE, false, 1,
                                                                                    TEE_STAGE, 10, false,
                                                                                    TILING_AGGREGATOR_STAGE, 3, false,
                                                                                    false, true, 0.3, 0.1,
