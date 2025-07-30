@@ -36,4 +36,8 @@ void yolov5s_personface(HailoROIPtr roi);
 void yolov5_no_persons(HailoROIPtr roi);
 void yolov5m_vehicles(HailoROIPtr roi);
 void yolov5m_vehicles_nv12(HailoROIPtr roi);
+void yolov7(HailoROIPtr roi);
+bool is_intrusion(
+    float obj_xmin, float obj_ymin, float obj_xmax, float obj_ymax,
+    float zone_xmin, float zone_ymin, float zone_xmax, float zone_ymax);
 __END_DECLS

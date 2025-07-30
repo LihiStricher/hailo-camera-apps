@@ -195,6 +195,25 @@ void yolov5s_personface(HailoROIPtr roi)
     hailo_common::add_detections(roi, detections);
 }
 
+void yolov7(HailoROIPtr roi)
+{
+    if (!roi->has_tensors())
+    {
+        return;
+    }
+    auto post = HailoNMSDecode(roi->get_tensor("yolov7/yolov5_nms_postprocess"), common::coco_eighty);
+    auto detections = post.decode<float32_t, common::hailo_bbox_float32_t>();
+    hailo_common::add_detections(roi, detections);
+
+    float zone_xmin = 0.6;
+    float zone_ymin = 0.2;
+    float zone_xmax = 0.9;
+    float zone_ymax = 0.7;
+    // add a detection that represents the zone
+    HailoBBox zone_bbox = HailoBBox(zone_xmin, zone_ymin, zone_xmax - zone_xmin, zone_ymax - zone_ymin);
+    hailo_common::add_detection(roi, zone_bbox, "zone", NULL);
+}
+
 void yolov5_no_persons(HailoROIPtr roi)
 {
     if (!roi->has_tensors())

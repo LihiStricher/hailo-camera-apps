@@ -376,37 +376,47 @@ overlay_status_t draw_all(HailoMat &hmat, HailoROIPtr roi, std::shared_ptr<Stage
         case HAILO_DETECTION:
         {
             HailoDetectionPtr detection = std::dynamic_pointer_cast<HailoDetection>(obj);
-
-            cv::Scalar color = NO_GLOBAL_ID_COLOR;
-            std::string text = "";
-            if (local_gallery)
+            if (detection->get_label() == "person" || detection->get_label() == "face"  || detection->get_label() == "zone")
             {
-                auto global_ids = hailo_common::get_hailo_global_id(detection);
-                if (global_ids.size() > 1){
-                    std::cerr << "ERROR: more than one global id in roi" << std::endl;
-                    REFERENCE_CAMERA_LOG_ERROR("ERROR: more than one global id in roi");
+                cv::Scalar color = NO_GLOBAL_ID_COLOR;
+                std::string text = "";
+                if (local_gallery)
+                {
+                    auto global_ids = hailo_common::get_hailo_global_id(detection);
+                    if (global_ids.size() > 1)
+                    {
+                        std::cerr << "ERROR: more than one global id in roi" << std::endl;
+                        REFERENCE_CAMERA_LOG_ERROR("ERROR: more than one global id in roi");
+                    }
+                    if (global_ids.size() == 1)
+                        color = GLOBAL_ID_COLOR;
                 }
-                if (global_ids.size() == 1)
-                    color = GLOBAL_ID_COLOR;
+                else
+                {
+                    color = get_color((size_t)detection->get_class_id());
+                    text = get_detection_text(detection, show_confidence);
+                }
+
+                if (detection->get_label() == "zone")
+                {
+                    color = cv::Scalar(255, 0, 0);
+                    text = "";
+                }
+
+                // Draw Rectangle
+                auto rect = get_rect(hmat, detection, roi);
+                hmat.draw_rectangle(rect, color);
+
+                // Draw text
+                auto text_position = cv::Point(rect.x - log(rect.width), rect.y - log(rect.width));
+                float font_scale = TEXT_FONT_FACTOR * log(rect.width);
+                hmat.draw_text(text, text_position, font_scale, color);
+
+                debug_counters->increment_extra_counter(static_cast<int>(OverlayExtraCounters::DETECTIONS));
+                // Draw inner objects.
+                ret = draw_all(hmat, detection, debug_counters, landmark_point_radius, show_confidence, local_gallery, mask_overlay_n_threads, partial_landmarks, min_landmark, max_landmark);
             }
-            else
-            {
-                color = get_color((size_t)detection->get_class_id());
-                text = get_detection_text(detection, show_confidence);
-            }
 
-            // Draw Rectangle
-            auto rect = get_rect(hmat, detection, roi);
-            hmat.draw_rectangle(rect, color);
-
-            // Draw text
-            auto text_position = cv::Point(rect.x - log(rect.width), rect.y - log(rect.width));
-            float font_scale = TEXT_FONT_FACTOR * log(rect.width);
-            hmat.draw_text(text, text_position, font_scale, color);
-
-            debug_counters->increment_extra_counter(static_cast<int>(OverlayExtraCounters::DETECTIONS));
-            // Draw inner objects.
-            ret = draw_all(hmat, detection, debug_counters, landmark_point_radius, show_confidence, local_gallery, mask_overlay_n_threads, partial_landmarks, min_landmark, max_landmark);
             break;
         }
         case HAILO_CLASSIFICATION:

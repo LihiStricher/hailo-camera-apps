@@ -45,6 +45,9 @@ hailo_lib_args = get_option('libargs')
 # Apps install dir
 apps_install_dir = get_option('apps_install_dir')
 
+# ZMQ dep
+zmq_dep = dependency('libzmq', method : 'pkg-config')
+
 
 ################################################
 # HAILORT DEP
@@ -84,6 +87,11 @@ tracker_dep = dependency('hailo_tracker', method : 'pkg-config')
 tappas_general_dep = dependency('hailo_tappas_general', method : 'pkg-config')
 
 ################################################
+# DSP Dep
+################################################
+dsp_dep = meson.get_compiler('c').find_library('libhailodsp', required: true, dirs: sysroot + '/usr/lib/')
+
+################################################
 # MEDIA LIBRARY DEPS
 ################################################
 media_library_common_dep = dependency('hailo_media_library_common', method : 'pkg-config')
@@ -94,7 +102,7 @@ encoder_dep = dependency('hailo_encoder', method : 'pkg-config')
 gstmedialibrary_utils_dep = dependency('gstmedialibutils', method : 'pkg-config')
 gyro_lib_dep = dependency('hailo_media_library_gyro', method : 'pkg-config')
 
-dependencies_apps = gst_deps + media_library_encoder_dep + media_library_common_dep + media_library_frontend_dep + encoder_dep + media_library_api_dep + gstmedialibrary_utils_dep + gyro_lib_dep
+dependencies_apps = gst_deps + media_library_encoder_dep + media_library_common_dep + media_library_frontend_dep + encoder_dep + media_library_api_dep + gstmedialibrary_utils_dep + gyro_lib_dep + zmq_dep + dsp_dep
 
 target = get_option('target')
 
