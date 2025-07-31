@@ -30,6 +30,9 @@
 #include "aggregator_stage.hpp"
 #include "reference_camera_logger.hpp"
 #include "output_metadata_stage.hpp"
+#include "dsp_convert_stage.hpp"
+#include "fire_detection_ai_stage.hpp"
+#include "drop_frames_stage.hpp"
 
 // Frontend Params
 #define FRONTEND_STAGE "frontend_stage"
@@ -52,14 +55,22 @@
 #define POST_STAGE "yolo_post"
 #define YOLO_POST_SO "/usr/lib/hailo-post-processes/libyolo_hailortpp_post.so"
 #define YOLO_FUNC_NAME "yolov7"
+
+#define CLIP_HEF_FILE "/home/root/apps/s1_demo/resources/rgb_clip_convnext_visual_256.hef"
+#define CLIP_AI_STAGE "fire_detection"
+
 // Aggregator Params
 #define RESULTS_AGGREGATOR_STAGE "results_aggregator"
 #define TILING_AGGREGATOR_STAGE "tiling_aggregator"
+#define FD_TILLING_AGGREGATOR_STAGE "fd_tiling_aggregator"
 #define AGGREGATOR_STAGE "aggregator"
 #define AGGREGATOR_STAGE_2 "aggregator2"
 #define AGGREGATOR_STAGE_3 "aggregator3"
 // Tee Params
 #define TEE_STAGE "vision_tee"
+#define DEMO_TEE_STAGE "demo_tee"
+
+#define CONVERT_STAGE "convert"
 
 // Tilling Params
 #define TILLING_STAGE "tilling"
@@ -68,6 +79,20 @@
 #define TILLING_OUTPUT_WIDTH 640
 #define TILLING_OUTPUT_HEIGHT 640
 std::vector<HailoBBox> TILES = {{0.0, 0.0, 1.0, 1.0}};
+
+#define FD_TILLING_STAGE "fd_tilling"
+#define FD_TILLING_INPUT_WIDTH 1920
+#define FD_TILLING_INPUT_HEIGHT 1080
+#define FD_TILLING_OUTPUT_WIDTH 256
+#define FD_TILLING_OUTPUT_HEIGHT 256
+std::vector<HailoBBox> FD_TILES = {
+    {0.0, 0.0, 0.333, 0.5},   // top-left
+    {0.333, 0.0, 0.333, 0.5}, // top-middle
+    {0.666, 0.0, 0.333, 0.5}, // top-right
+    {0.0, 0.5, 0.333, 0.5},   // bottom-left
+    {0.333, 0.5, 0.333, 0.5}, // bottom-middle
+    {0.666, 0.5, 0.333, 0.5}  // bottom-right
+};
 
 // face Bbox crop Parms
 #define FACE_BBOX_CROP_STAGE "face_bbox_crops"
@@ -107,6 +132,8 @@ std::vector<HailoBBox> TILES = {{0.0, 0.0, 1.0, 1.0}};
 // Macro that turns coverts stream ids to port #s
 #define PORT_FROM_ID(id) std::to_string(5000 + std::stoi(id.substr(4)) * 2)
 
+int fire_detection_fps = 3; // Default fire detection FPS
+
 enum class ArgumentType
 {
     Help,
@@ -116,6 +143,7 @@ enum class ArgumentType
     Config,
     SkipDrawing,
     FullLandmarks,
+    FireDetectionFPS,
     Error
 };
 
@@ -127,7 +155,7 @@ void print_help(const cxxopts::Options &options)
 cxxopts::Options build_arg_parser()
 {
     cxxopts::Options options("AI pipeline app");
-    options.add_options()("h, help", "Show this help")("t, timeout", "Time to run", cxxopts::value<int>()->default_value("3000"))("p, print-fps", "Print FPS", cxxopts::value<bool>()->default_value("false"))("l, print-latency", "Print Latency", cxxopts::value<bool>()->default_value("false"))("c, config-file-path", "media library Configuration Path", cxxopts::value<std::string>()->default_value(MEDIALIB_CONFIG_PATH))("s, skip-drawing", "Skip drawing", cxxopts::value<bool>()->default_value("false"))("f, full-landmarks", "Draw all landmarks (default draws only eyes for face landmarks)", cxxopts::value<bool>()->default_value("false"));
+    options.add_options()("h, help", "Show this help")("t, timeout", "Time to run", cxxopts::value<int>()->default_value("3000"))("p, print-fps", "Print FPS", cxxopts::value<bool>()->default_value("false"))("l, print-latency", "Print Latency", cxxopts::value<bool>()->default_value("false"))("c, config-file-path", "media library Configuration Path", cxxopts::value<std::string>()->default_value(MEDIALIB_CONFIG_PATH))("s, skip-drawing", "Skip drawing", cxxopts::value<bool>()->default_value("false"))("f, full-landmarks", "Draw all landmarks (default draws only eyes for face landmarks)", cxxopts::value<bool>()->default_value("false"))("fd_fps", "Fire detection FPS", cxxopts::value<int>()->default_value("3"));
     return options;
 }
 
@@ -169,6 +197,11 @@ std::vector<ArgumentType> handle_arguments(const cxxopts::ParseResult &result, c
     if (result.count("full-landmarks"))
     {
         arguments.push_back(ArgumentType::FullLandmarks);
+    }
+
+    if (result.count("fd_fps"))
+    {
+        arguments.push_back(ArgumentType::FireDetectionFPS);
     }
 
     // Handle unrecognized options
@@ -262,7 +295,7 @@ void subscribe_to_frontend(std::shared_ptr<AppResources> app_resources)
             std::cout << "subscribing ai pipeline to frontend for '" << s.id << "'" << std::endl;
             // Subscribe tiling to frontend
             app_resources->frontend->subscribe_to_stream(s.id,
-                                                         std::static_pointer_cast<ConnectedStage>(app_resources->pipeline->get_stage_by_name(TILLING_STAGE)));
+                                                         std::static_pointer_cast<ConnectedStage>(app_resources->pipeline->get_stage_by_name(DEMO_TEE_STAGE)));
         }
         else if (s.id == AI_VISION_SINK)
         {
@@ -408,11 +441,11 @@ void create_ai_pipeline(std::shared_ptr<AppResources> app_resources)
         | tiling | -> | yolo | -> | post | -> | aggregator |
         +--------+    +------+    +------+    +------------+
     */
-    std::shared_ptr<TillingCropStage> tilling_stage = std::make_shared<TillingCropStage>(TILLING_STAGE, 50, TILLING_INPUT_WIDTH, TILLING_INPUT_HEIGHT,
+    std::shared_ptr<TillingCropStage> tilling_stage = std::make_shared<TillingCropStage>(TILLING_STAGE, 51, TILLING_INPUT_WIDTH, TILLING_INPUT_HEIGHT,
                                                                                          TILLING_OUTPUT_WIDTH, TILLING_OUTPUT_HEIGHT,
                                                                                          TILING_AGGREGATOR_STAGE, DETECTION_AI_STAGE, TILES,
                                                                                          5, true, app_resources->print_fps, StagePoolMode::BLOCKING);
-    std::shared_ptr<HailortAsyncStage> detection_stage = std::make_shared<HailortAsyncStage>(DETECTION_AI_STAGE, YOLO_HEF_FILE, 5, 50, "device0", 5, 10, 5, false,
+    std::shared_ptr<HailortAsyncStage> detection_stage = std::make_shared<HailortAsyncStage>(DETECTION_AI_STAGE, YOLO_HEF_FILE, 5, 52, "device0", 5, 10, 5, false,
                                                                                              std::chrono::milliseconds(100), app_resources->print_fps, StagePoolMode::BLOCKING);
     std::shared_ptr<PostprocessStage> detection_post_stage = std::make_shared<PostprocessStage>(POST_STAGE, YOLO_POST_SO, YOLO_FUNC_NAME, "", 5, false, app_resources->print_fps);
     std::shared_ptr<AggregatorStage> tiling_agg_stage = std::make_shared<AggregatorStage>(TILING_AGGREGATOR_STAGE, true, 1,
@@ -467,6 +500,23 @@ void create_ai_pipeline(std::shared_ptr<AppResources> app_resources)
                                                                                      false, false, 0.3, 0.1,
                                                                                      app_resources->print_fps);
 
+
+
+    std::shared_ptr<TeeStage> demo_tee_stage = std::make_shared<TeeStage>(DEMO_TEE_STAGE, 5, true, app_resources->print_fps);
+    std::shared_ptr<DropFrameStage> drop_frames_stage = std::make_shared<DropFrameStage>("drop_frames", 5, true, app_resources->print_fps, fire_detection_fps);
+    std::shared_ptr<TillingCropStage> fire_detection_tilling_stage = std::make_shared<TillingCropStage>(FD_TILLING_STAGE, 55, FD_TILLING_INPUT_WIDTH, FD_TILLING_INPUT_HEIGHT,
+                                                                                         FD_TILLING_OUTPUT_WIDTH, FD_TILLING_OUTPUT_HEIGHT,
+                                                                                         FD_TILLING_AGGREGATOR_STAGE, CONVERT_STAGE, FD_TILES,
+                                                                                         5, true, app_resources->print_fps, StagePoolMode::BLOCKING);
+    std::shared_ptr<DspConvertStage> convert_stage = std::make_shared<DspConvertStage>(CONVERT_STAGE, 30);
+    std::shared_ptr<FireDetectionHailortAsyncStage> clip_stage = std::make_shared<FireDetectionHailortAsyncStage>(CLIP_AI_STAGE, CLIP_HEF_FILE, 6, 54, "device0", 6, 10, 6, false,
+                                                                                                                       std::chrono::milliseconds(100), app_resources->print_fps, StagePoolMode::BLOCKING);
+    std::shared_ptr<AggregatorStage> fire_detection_tiling_agg_stage = std::make_shared<AggregatorStage>(FD_TILLING_AGGREGATOR_STAGE, false, 6,
+                                                                                          FD_TILLING_STAGE, 6, true,
+                                                                                          CLIP_AI_STAGE, 20, false,
+                                                                                          true, false, 0.3, 0.1,
+                                                                                          app_resources->print_fps);
+
     // Add stages to pipeline
     app_resources->pipeline->add_stage(tee_stage);
     app_resources->pipeline->add_stage(results_agg_stage);
@@ -487,26 +537,27 @@ void create_ai_pipeline(std::shared_ptr<AppResources> app_resources)
     app_resources->pipeline->add_stage(landmarks_post_stage);
     app_resources->pipeline->add_stage(agg_stage_3);
 
-    // // Subscribe stages to each other
-    // // AI Pipeline stages
-    // tee_stage->add_subscriber(agg_stage);
-    // tilling_stage->add_subscriber(tiling_agg_stage);
-    // tilling_stage->add_subscriber(detection_stage);
-    // detection_stage->add_subscriber(detection_post_stage);
-    // detection_post_stage->add_subscriber(tiling_agg_stage);
-    // tiling_agg_stage->add_subscriber(agg_stage);
-    // agg_stage->add_subscriber(face_bbox_crop_stage);
-    // face_bbox_crop_stage->add_subscriber(agg_stage_3);
-    // face_bbox_crop_stage->add_subscriber(landmarks_stage);
-    // landmarks_stage->add_subscriber(landmarks_post_stage);
-    // landmarks_post_stage->add_subscriber(agg_stage_3);
-    // agg_stage_3->add_subscriber(results_agg_stage);
+    app_resources->pipeline->add_stage(demo_tee_stage);
+    app_resources->pipeline->add_stage(drop_frames_stage);
+    app_resources->pipeline->add_stage(fire_detection_tilling_stage);
+    app_resources->pipeline->add_stage(convert_stage);
+    app_resources->pipeline->add_stage(clip_stage);
+    app_resources->pipeline->add_stage(fire_detection_tiling_agg_stage);
+
 
     // Subscribe stages to each other
     // AI Pipeline stages
+    demo_tee_stage->add_subscriber(tilling_stage);
+    demo_tee_stage->add_subscriber(drop_frames_stage);
+    drop_frames_stage->add_subscriber(fire_detection_tilling_stage);
+    fire_detection_tilling_stage->add_subscriber(fire_detection_tiling_agg_stage);
+    fire_detection_tilling_stage->add_subscriber(convert_stage);
+    convert_stage->add_subscriber(clip_stage);
+    clip_stage->add_subscriber(fire_detection_tiling_agg_stage);
+
     tee_stage->add_subscriber(agg_stage);
     tilling_stage->add_subscriber(tiling_agg_stage);
-    tilling_stage->add_subscriber(detection_stage);
+    tilling_stage->add_subscriber(detection_stage);                                                                                         
     detection_stage->add_subscriber(detection_post_stage);
     detection_post_stage->add_subscriber(tiling_agg_stage);
     tiling_agg_stage->add_subscriber(agg_stage);
@@ -587,6 +638,15 @@ int main(int argc, char *argv[])
                 break;
             case ArgumentType::FullLandmarks:
                 app_resources->full_landmarks = true;
+                break;
+            case ArgumentType::FireDetectionFPS:
+                fire_detection_fps = result["fd_fps"].as<int>();
+                if(fire_detection_fps > 15)
+                {
+                    std::cerr << "Fire detection FPS cannot be greater than 15. Setting to 15." << std::endl;
+                    fire_detection_fps = 15;
+                }
+                std::cout << "Fire detection FPS set to: " << fire_detection_fps << std::endl;
                 break;
             case ArgumentType::Error:
                 return 1;

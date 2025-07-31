@@ -75,6 +75,33 @@ public:
         }
     }
 
+    void log_isp_delay(uint64_t isp_timestamp_ns)
+    {
+        using namespace std::chrono;
+        static std::optional<steady_clock::time_point> prev_time;
+
+        auto now = steady_clock::now();
+        auto now_ns = duration_cast<nanoseconds>(now.time_since_epoch()).count();
+
+        if (prev_time)
+        {
+            // ms from ISP timestamp until now
+            uint64_t isp_delay_ms = 0;
+            if (static_cast<uint64_t>(now_ns) > isp_timestamp_ns)
+            {
+                isp_delay_ms = (static_cast<uint64_t>(now_ns) - isp_timestamp_ns) / 1'000'000;
+            }
+
+            std::cout << "Overall VPU latency: " << isp_delay_ms << " ms" << std::endl;
+        }
+        else
+        {
+            std::cout << "First frame (no prev), isp_ts=" << isp_timestamp_ns << " ns\n";
+        }
+
+        prev_time = now;
+    }
+
     AppStatus process(BufferPtr data)
     {
         if (!init_done)
@@ -163,6 +190,8 @@ public:
             zmq::message_t zmq_msg(all_messages.dump());
             zmq_publisher.send(zmq_msg, zmq::send_flags::none);
         }
+
+        log_isp_delay(data->get_buffer()->isp_timestamp_ns);    
 
         data->add_time_stamp(m_stage_name);
         set_duration(data);

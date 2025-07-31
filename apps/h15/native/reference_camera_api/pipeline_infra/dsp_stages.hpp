@@ -138,6 +138,10 @@ public:
         prepare_crops(data, crop_resize_dims);
 
         std::size_t num_crops_allowed = std::min(crop_resize_dims.size(), (std::size_t)m_buffer_pool->get_available_buffers_count());
+        if(m_stage_name == "person_bbox_crops")
+        {
+            num_crops_allowed = std::min(num_crops_allowed, std::size_t(10));
+        }
         if (num_crops_allowed < crop_resize_dims.size()) {
             int num_drops = (crop_resize_dims.size() - num_crops_allowed);
             m_debug_counters->increment_by_val_extra_counter(num_drops, static_cast<int>(CropsExtraCounters::DROPPED));
