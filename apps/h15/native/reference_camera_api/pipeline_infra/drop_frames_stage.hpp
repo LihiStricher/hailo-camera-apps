@@ -40,19 +40,7 @@ public:
     }
 
     AppStatus process(BufferPtr data)
-    {
-        // print the FPS
-        static auto start_time = std::chrono::steady_clock::now();
-        static int frame_count = 0;
-        frame_count++;
-        auto current_time = std::chrono::steady_clock::now();
-        if (std::chrono::duration_cast<std::chrono::seconds>(current_time - start_time).count() >= 1)
-        {
-            std::cout << "[ " << m_stage_name << " ] Frames processed per second: " << frame_count << std::endl;
-            frame_count = 0;
-            start_time = current_time;
-        }
-        
+    {   
         if(fd_fps <= 0)
         {
             return AppStatus::SUCCESS;
