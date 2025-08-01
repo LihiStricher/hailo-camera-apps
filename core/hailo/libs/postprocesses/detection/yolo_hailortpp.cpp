@@ -212,6 +212,8 @@ void yolov7(HailoROIPtr roi)
     // add a detection that represents the zone
     HailoBBox zone_bbox = HailoBBox(zone_xmin, zone_ymin, zone_xmax - zone_xmin, zone_ymax - zone_ymin);
     hailo_common::add_detection(roi, zone_bbox, "zone", NULL);
+    HailoBBox fire_bbox = HailoBBox(0, 0, 0.333, 0.5);
+    hailo_common::add_detection(roi, fire_bbox, "fire", NULL);
 }
 
 void yolov5_no_persons(HailoROIPtr roi)
