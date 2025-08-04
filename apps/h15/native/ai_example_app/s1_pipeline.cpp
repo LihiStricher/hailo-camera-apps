@@ -86,7 +86,12 @@ std::vector<HailoBBox> TILES = {{0.0, 0.0, 1.0, 1.0}};
 #define FD_TILLING_OUTPUT_WIDTH 256
 #define FD_TILLING_OUTPUT_HEIGHT 256
 std::vector<HailoBBox> FD_TILES = {
-    {0.0, 0.0, 0.333, 0.5}  // top-left
+    {0.0, 0.0, 0.333, 0.5},   // top-left
+    {0.333, 0.0, 0.333, 0.5}, // top-middle
+    {0.666, 0.0, 0.333, 0.5}, // top-right
+    {0.0, 0.5, 0.333, 0.5},   // bottom-left
+    {0.333, 0.5, 0.333, 0.5}, // bottom-middle
+    {0.666, 0.5, 0.333, 0.5}  // bottom-right
 };
 
 // face Bbox crop Parms
@@ -504,10 +509,10 @@ void create_ai_pipeline(std::shared_ptr<AppResources> app_resources)
                                                                                          FD_TILLING_AGGREGATOR_STAGE, CONVERT_STAGE, FD_TILES,
                                                                                          5, true, app_resources->print_fps, StagePoolMode::BLOCKING);
     std::shared_ptr<DspConvertStage> convert_stage = std::make_shared<DspConvertStage>(CONVERT_STAGE, 30);
-    std::shared_ptr<FireDetectionHailortAsyncStage> clip_stage = std::make_shared<FireDetectionHailortAsyncStage>(CLIP_AI_STAGE, CLIP_HEF_FILE, 5, 54, "device0", 1, 10, 1, false,
+    std::shared_ptr<FireDetectionHailortAsyncStage> clip_stage = std::make_shared<FireDetectionHailortAsyncStage>(CLIP_AI_STAGE, CLIP_HEF_FILE, 6, 54, "device0", 6, 10, 6, false,
                                                                                                                        std::chrono::milliseconds(100), app_resources->print_fps, StagePoolMode::BLOCKING);
-    std::shared_ptr<AggregatorStage> fire_detection_tiling_agg_stage = std::make_shared<AggregatorStage>(FD_TILLING_AGGREGATOR_STAGE, false, 1,
-                                                                                          FD_TILLING_STAGE, 5, true,
+    std::shared_ptr<AggregatorStage> fire_detection_tiling_agg_stage = std::make_shared<AggregatorStage>(FD_TILLING_AGGREGATOR_STAGE, false, 6,
+                                                                                          FD_TILLING_STAGE, 6, true,
                                                                                           CLIP_AI_STAGE, 20, false,
                                                                                           true, false, 0.3, 0.1,
                                                                                           app_resources->print_fps);
