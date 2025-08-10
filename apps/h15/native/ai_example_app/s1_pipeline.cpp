@@ -60,32 +60,35 @@
 #define CLIP_AI_STAGE "fire_detection"
 
 // Aggregator Params
+
+#define AFTER_RESIZE_AGGREGATOR_STAGE "after_resize_aggregator"
+#define CROPPED_PERSONS_AGGREGATOR "cropped_persons_aggregator"
+#define CROPPED_FACES_AGGREGATOR "cropped_faces_aggregator"
+#define FIRE_DET_TILLING_AGGREGATOR_STAGE "fire_det_tiling_aggregator"
+
 #define RESULTS_AGGREGATOR_STAGE "results_aggregator"
-#define TILING_AGGREGATOR_STAGE "tiling_aggregator"
-#define FD_TILLING_AGGREGATOR_STAGE "fd_tiling_aggregator"
 #define AGGREGATOR_STAGE "aggregator"
-#define AGGREGATOR_STAGE_2 "aggregator2"
-#define AGGREGATOR_STAGE_3 "aggregator3"
+
 // Tee Params
 #define TEE_STAGE "vision_tee"
 #define DEMO_TEE_STAGE "demo_tee"
 
 #define CONVERT_STAGE "convert"
 
-// Tilling Params
-#define TILLING_STAGE "tilling"
-#define TILLING_INPUT_WIDTH 1920
-#define TILLING_INPUT_HEIGHT 1080
-#define TILLING_OUTPUT_WIDTH 640
-#define TILLING_OUTPUT_HEIGHT 640
-std::vector<HailoBBox> TILES = {{0.0, 0.0, 1.0, 1.0}};
+// Resize Params
+#define PERSON_DET_RESIZE_STAGE "person_detection_resize_stage"
+#define PERSON_DET_RESIZE_INPUT_WIDTH 1920
+#define PERSON_DET_RESIZE_INPUT_HEIGHT 1080
+#define PERSON_DET_RESIZE_OUTPUT_WIDTH 640
+#define PERSON_DET_RESIZE_OUTPUT_HEIGHT 640
+std::vector<HailoBBox> PERSON_DET_TILE = {{0.0, 0.0, 1.0, 1.0}};
 
-#define FD_TILLING_STAGE "fd_tilling"
-#define FD_TILLING_INPUT_WIDTH 1920
-#define FD_TILLING_INPUT_HEIGHT 1080
-#define FD_TILLING_OUTPUT_WIDTH 256
-#define FD_TILLING_OUTPUT_HEIGHT 256
-std::vector<HailoBBox> FD_TILES = {
+#define FIRE_DET_TILLING_STAGE "fire_detection_tilling_stage"
+#define FIRE_DET_TILLING_INPUT_WIDTH 1920
+#define FIRE_DET_TILLING_INPUT_HEIGHT 1080
+#define FIRE_DET_TILLING_OUTPUT_WIDTH 256
+#define FIRE_DET_TILLING_OUTPUT_HEIGHT 256
+std::vector<HailoBBox> FIRE_DET_TILES = {
     {0.0, 0.0, 0.333, 0.5},   // top-left
     {0.333, 0.0, 0.333, 0.5}, // top-middle
     {0.666, 0.0, 0.333, 0.5}, // top-right
@@ -427,7 +430,7 @@ void create_ai_pipeline(std::shared_ptr<AppResources> app_resources)
     std::shared_ptr<TeeStage> tee_stage = std::make_shared<TeeStage>(TEE_STAGE, 5, true, app_resources->print_fps);
     std::shared_ptr<AggregatorStage> results_agg_stage = std::make_shared<AggregatorStage>(RESULTS_AGGREGATOR_STAGE, true, 1,
                                                                                            TEE_STAGE, 10, false,
-                                                                                           AGGREGATOR_STAGE_3, 5, false,
+                                                                                           CROPPED_FACES_AGGREGATOR, 5, false,
                                                                                            false, true, 0.3, 0.1,
                                                                                            app_resources->print_fps, std::chrono::milliseconds(300));
     std::shared_ptr<PersistStage> tracker_stage = std::make_shared<PersistStage>(TRACKER_STAGE, 3, 1, false, app_resources->print_fps);
@@ -441,21 +444,21 @@ void create_ai_pipeline(std::shared_ptr<AppResources> app_resources)
         | tiling | -> | yolo | -> | post | -> | aggregator |
         +--------+    +------+    +------+    +------------+
     */
-    std::shared_ptr<TillingCropStage> tilling_stage = std::make_shared<TillingCropStage>(TILLING_STAGE, 51, TILLING_INPUT_WIDTH, TILLING_INPUT_HEIGHT,
-                                                                                         TILLING_OUTPUT_WIDTH, TILLING_OUTPUT_HEIGHT,
-                                                                                         TILING_AGGREGATOR_STAGE, DETECTION_AI_STAGE, TILES,
+    std::shared_ptr<TillingCropStage> person_det_resize_stage = std::make_shared<TillingCropStage>(PERSON_DET_RESIZE_STAGE, 51, PERSON_DET_RESIZE_INPUT_WIDTH, PERSON_DET_RESIZE_INPUT_HEIGHT,
+                                                                                         PERSON_DET_RESIZE_OUTPUT_WIDTH, PERSON_DET_RESIZE_OUTPUT_HEIGHT,
+                                                                                         AFTER_RESIZE_AGGREGATOR_STAGE, DETECTION_AI_STAGE, PERSON_DET_TILE,
                                                                                          5, true, app_resources->print_fps, StagePoolMode::BLOCKING);
-    std::shared_ptr<HailortAsyncStage> detection_stage = std::make_shared<HailortAsyncStage>(DETECTION_AI_STAGE, YOLO_HEF_FILE, 5, 52, "device0", 5, 10, 5, false,
+    std::shared_ptr<HailortAsyncStage> yolo_detection_stage = std::make_shared<HailortAsyncStage>(DETECTION_AI_STAGE, YOLO_HEF_FILE, 5, 52, "device0", 5, 10, 5, false,
                                                                                              std::chrono::milliseconds(100), app_resources->print_fps, StagePoolMode::BLOCKING);
-    std::shared_ptr<PostprocessStage> detection_post_stage = std::make_shared<PostprocessStage>(POST_STAGE, YOLO_POST_SO, YOLO_FUNC_NAME, "", 5, false, app_resources->print_fps);
-    std::shared_ptr<AggregatorStage> tiling_agg_stage = std::make_shared<AggregatorStage>(TILING_AGGREGATOR_STAGE, true, 1,
-                                                                                          TILLING_STAGE, 2, false,
+    std::shared_ptr<PostprocessStage> yolo_post_stage = std::make_shared<PostprocessStage>(POST_STAGE, YOLO_POST_SO, YOLO_FUNC_NAME, "", 5, false, app_resources->print_fps);
+    std::shared_ptr<AggregatorStage> after_resize_agg_stage = std::make_shared<AggregatorStage>(AFTER_RESIZE_AGGREGATOR_STAGE, true, 1,
+                                                                                          PERSON_DET_RESIZE_STAGE, 2, false,
                                                                                           POST_STAGE, 5, false,
                                                                                           true, false, 0.3, 0.1,
                                                                                           app_resources->print_fps);
     std::shared_ptr<AggregatorStage> agg_stage = std::make_shared<AggregatorStage>(AGGREGATOR_STAGE, true, 1,
                                                                                    TEE_STAGE, 10, false,
-                                                                                   TILING_AGGREGATOR_STAGE, 3, false,
+                                                                                   AFTER_RESIZE_AGGREGATOR_STAGE, 3, false,
                                                                                    false, true, 0.3, 0.1,
                                                                                    app_resources->print_fps);
 
@@ -468,12 +471,12 @@ void create_ai_pipeline(std::shared_ptr<AppResources> app_resources)
     */
     std::shared_ptr<BBoxCropStage> person_bbox_crop_stage = std::make_shared<BBoxCropStage>(PERSON_BBOX_CROP_STAGE, 150, PERSON_BBOX_CROP_INPUT_WIDTH, PERSON_BBOX_CROP_INPUT_HEIGHT,
                                                                                             PERSON_BBOX_CROP_OUTPUT_WIDTH, PERSON_BBOX_CROP_OUTPUT_HEIGHT,
-                                                                                            AGGREGATOR_STAGE_2, FACE_DETECTION_AI_STAGE, PERSON_BBOX_CROP_LABEL, 10, false,
+                                                                                            CROPPED_PERSONS_AGGREGATOR, FACE_DETECTION_AI_STAGE, PERSON_BBOX_CROP_LABEL, 10, false,
                                                                                             app_resources->print_fps, StagePoolMode::BLOCKING);
     std::shared_ptr<HailortAsyncStage> face_detection_stage = std::make_shared<HailortAsyncStage>(FACE_DETECTION_AI_STAGE, FACE_DETECTION_HEF_FILE, 100, 50, "device0", 50, 60, 50, true,
                                                                                                   std::chrono::milliseconds(100), app_resources->print_fps, StagePoolMode::BLOCKING);
     std::shared_ptr<PostprocessStage> face_detection_post_stage = std::make_shared<PostprocessStage>(FACE_DETECTION_POST_STAGE, FACE_DETECTION_POST_SO, FACE_DETECTION_FUNC_NAME, "", 100, false, app_resources->print_fps);
-    std::shared_ptr<AggregatorStage> agg_stage_2 = std::make_shared<AggregatorStage>(AGGREGATOR_STAGE_2, true,
+    std::shared_ptr<AggregatorStage> cropped_persons_agg = std::make_shared<AggregatorStage>(CROPPED_PERSONS_AGGREGATOR, true,
                                                                                      PERSON_BBOX_CROP_STAGE, 3, false,
                                                                                      FACE_DETECTION_POST_STAGE, 100, false,
                                                                                      false, false, 0.3, 0.1,
@@ -489,12 +492,12 @@ void create_ai_pipeline(std::shared_ptr<AppResources> app_resources)
 
     std::shared_ptr<BBoxCropStage> face_bbox_crop_stage = std::make_shared<BBoxCropStage>(FACE_BBOX_CROP_STAGE, 150, FACE_BBOX_CROP_INPUT_WIDTH, FACE_BBOX_CROP_INPUT_HEIGHT,
                                                                                           FACE_BBOX_CROP_OUTPUT_WIDTH, FACE_BBOX_CROP_OUTPUT_HEIGHT,
-                                                                                          AGGREGATOR_STAGE_3, LANDMARKS_AI_STAGE, FACE_BBOX_CROP_LABEL, 10, false,
+                                                                                          CROPPED_FACES_AGGREGATOR, LANDMARKS_AI_STAGE, FACE_BBOX_CROP_LABEL, 10, false,
                                                                                           app_resources->print_fps, StagePoolMode::BLOCKING);
     std::shared_ptr<HailortAsyncStage> landmarks_stage = std::make_shared<HailortAsyncStage>(LANDMARKS_AI_STAGE, LANDMARKS_HEF_FILE, 100, 201, "device0", 50, 60, 50, true,
                                                                                              std::chrono::milliseconds(100), app_resources->print_fps, StagePoolMode::BLOCKING);
     std::shared_ptr<PostprocessStage> landmarks_post_stage = std::make_shared<PostprocessStage>(LANDMARKS_POST_STAGE, LANDMARKS_POST_SO, LANDMARKS_FUNC_NAME, "", 100, false, app_resources->print_fps);
-    std::shared_ptr<AggregatorStage> agg_stage_3 = std::make_shared<AggregatorStage>(AGGREGATOR_STAGE_3, true,
+    std::shared_ptr<AggregatorStage> cropped_faces_agg = std::make_shared<AggregatorStage>(CROPPED_FACES_AGGREGATOR, true,
                                                                                      FACE_BBOX_CROP_STAGE, 3, false,
                                                                                      LANDMARKS_POST_STAGE, 100, false,
                                                                                      false, false, 0.3, 0.1,
@@ -504,15 +507,15 @@ void create_ai_pipeline(std::shared_ptr<AppResources> app_resources)
 
     std::shared_ptr<TeeStage> demo_tee_stage = std::make_shared<TeeStage>(DEMO_TEE_STAGE, 5, true, app_resources->print_fps);
     std::shared_ptr<DropFrameStage> drop_frames_stage = std::make_shared<DropFrameStage>("drop_frames", 5, true, app_resources->print_fps, fire_detection_fps);
-    std::shared_ptr<TillingCropStage> fire_detection_tilling_stage = std::make_shared<TillingCropStage>(FD_TILLING_STAGE, 55, FD_TILLING_INPUT_WIDTH, FD_TILLING_INPUT_HEIGHT,
-                                                                                         FD_TILLING_OUTPUT_WIDTH, FD_TILLING_OUTPUT_HEIGHT,
-                                                                                         FD_TILLING_AGGREGATOR_STAGE, CONVERT_STAGE, FD_TILES,
+    std::shared_ptr<TillingCropStage> fire_detection_tilling_stage = std::make_shared<TillingCropStage>(FIRE_DET_TILLING_STAGE, 55, FIRE_DET_TILLING_INPUT_WIDTH, FIRE_DET_TILLING_INPUT_HEIGHT,
+                                                                                         FIRE_DET_TILLING_OUTPUT_WIDTH, FIRE_DET_TILLING_OUTPUT_HEIGHT,
+                                                                                         FIRE_DET_TILLING_AGGREGATOR_STAGE, CONVERT_STAGE, FIRE_DET_TILES,
                                                                                          5, true, app_resources->print_fps, StagePoolMode::BLOCKING);
     std::shared_ptr<DspConvertStage> convert_stage = std::make_shared<DspConvertStage>(CONVERT_STAGE, 30);
     std::shared_ptr<FireDetectionHailortAsyncStage> clip_stage = std::make_shared<FireDetectionHailortAsyncStage>(CLIP_AI_STAGE, CLIP_HEF_FILE, 6, 54, "device0", 6, 10, 6, false,
                                                                                                                        std::chrono::milliseconds(100), app_resources->print_fps, StagePoolMode::BLOCKING);
-    std::shared_ptr<AggregatorStage> fire_detection_tiling_agg_stage = std::make_shared<AggregatorStage>(FD_TILLING_AGGREGATOR_STAGE, false, 6,
-                                                                                          FD_TILLING_STAGE, 6, true,
+    std::shared_ptr<AggregatorStage> fire_detection_tiling_agg_stage = std::make_shared<AggregatorStage>(FIRE_DET_TILLING_AGGREGATOR_STAGE, false, 6,
+                                                                                          FIRE_DET_TILLING_STAGE, 6, true,
                                                                                           CLIP_AI_STAGE, 20, false,
                                                                                           true, false, 0.3, 0.1,
                                                                                           app_resources->print_fps);
@@ -524,18 +527,18 @@ void create_ai_pipeline(std::shared_ptr<AppResources> app_resources)
     app_resources->pipeline->add_stage(overlay_stage);
     app_resources->pipeline->add_stage(output_metadata_stage);
     app_resources->pipeline->add_stage(agg_stage);
-    app_resources->pipeline->add_stage(tilling_stage);
-    app_resources->pipeline->add_stage(detection_stage);
-    app_resources->pipeline->add_stage(detection_post_stage);
-    app_resources->pipeline->add_stage(tiling_agg_stage);
+    app_resources->pipeline->add_stage(person_det_resize_stage);
+    app_resources->pipeline->add_stage(yolo_detection_stage);
+    app_resources->pipeline->add_stage(yolo_post_stage);
+    app_resources->pipeline->add_stage(after_resize_agg_stage);
     app_resources->pipeline->add_stage(person_bbox_crop_stage);
     app_resources->pipeline->add_stage(face_detection_stage);
     app_resources->pipeline->add_stage(face_detection_post_stage);
-    app_resources->pipeline->add_stage(agg_stage_2);
+    app_resources->pipeline->add_stage(cropped_persons_agg);
     app_resources->pipeline->add_stage(face_bbox_crop_stage);
     app_resources->pipeline->add_stage(landmarks_stage);
     app_resources->pipeline->add_stage(landmarks_post_stage);
-    app_resources->pipeline->add_stage(agg_stage_3);
+    app_resources->pipeline->add_stage(cropped_faces_agg);
 
     app_resources->pipeline->add_stage(demo_tee_stage);
     app_resources->pipeline->add_stage(drop_frames_stage);
@@ -547,7 +550,7 @@ void create_ai_pipeline(std::shared_ptr<AppResources> app_resources)
 
     // Subscribe stages to each other
     // AI Pipeline stages
-    demo_tee_stage->add_subscriber(tilling_stage);
+    demo_tee_stage->add_subscriber(person_det_resize_stage);
     demo_tee_stage->add_subscriber(drop_frames_stage);
     drop_frames_stage->add_subscriber(fire_detection_tilling_stage);
     fire_detection_tilling_stage->add_subscriber(fire_detection_tiling_agg_stage);
@@ -556,22 +559,22 @@ void create_ai_pipeline(std::shared_ptr<AppResources> app_resources)
     clip_stage->add_subscriber(fire_detection_tiling_agg_stage);
 
     tee_stage->add_subscriber(agg_stage);
-    tilling_stage->add_subscriber(tiling_agg_stage);
-    tilling_stage->add_subscriber(detection_stage);                                                                                         
-    detection_stage->add_subscriber(detection_post_stage);
-    detection_post_stage->add_subscriber(tiling_agg_stage);
-    tiling_agg_stage->add_subscriber(agg_stage);
+    person_det_resize_stage->add_subscriber(after_resize_agg_stage);
+    person_det_resize_stage->add_subscriber(yolo_detection_stage);                                                                                         
+    yolo_detection_stage->add_subscriber(yolo_post_stage);
+    yolo_post_stage->add_subscriber(after_resize_agg_stage);
+    after_resize_agg_stage->add_subscriber(agg_stage);
     agg_stage->add_subscriber(person_bbox_crop_stage);
-    person_bbox_crop_stage->add_subscriber(agg_stage_2);
+    person_bbox_crop_stage->add_subscriber(cropped_persons_agg);
     person_bbox_crop_stage->add_subscriber(face_detection_stage);
     face_detection_stage->add_subscriber(face_detection_post_stage);
-    face_detection_post_stage->add_subscriber(agg_stage_2);
-    agg_stage_2->add_subscriber(face_bbox_crop_stage);
-    face_bbox_crop_stage->add_subscriber(agg_stage_3);
+    face_detection_post_stage->add_subscriber(cropped_persons_agg);
+    cropped_persons_agg->add_subscriber(face_bbox_crop_stage);
+    face_bbox_crop_stage->add_subscriber(cropped_faces_agg);
     face_bbox_crop_stage->add_subscriber(landmarks_stage);
     landmarks_stage->add_subscriber(landmarks_post_stage);
-    landmarks_post_stage->add_subscriber(agg_stage_3);
-    agg_stage_3->add_subscriber(results_agg_stage);
+    landmarks_post_stage->add_subscriber(cropped_faces_agg);
+    cropped_faces_agg->add_subscriber(results_agg_stage);
 
     // Vision Pipeline stages
     tee_stage->add_subscriber(results_agg_stage);
