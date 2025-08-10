@@ -1,7 +1,11 @@
 ################################################
 # Infra API Libs
 ################################################
-reference_camera_infra_src = ['reference_camera_infra.cpp','reference_camera_logger.cpp']
+reference_camera_infra_src = [
+  'reference_camera_infra.cpp',
+  'reference_camera_logger.cpp',
+  'pipeline_infra/file_source_stage.cpp'
+]
 
 reference_camera_infra_lib = shared_library('hailo_reference_camera',
   reference_camera_infra_src,

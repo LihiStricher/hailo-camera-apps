@@ -33,3 +33,20 @@ executable('s1_pipeline',
   install: true,
   install_dir: s1_demo_install_dir,
 )
+
+################################################
+# File Source to UDP Case Study
+################################################
+
+file_source_to_udp_install_dir = apps_install_dir + '/file_source_to_udp'
+
+file_source_to_udp_app_src = ['file_source_to_udp.cpp']
+
+executable('file_source_to_udp_case_study',
+  file_source_to_udp_app_src,
+  cpp_args : hailo_lib_args,
+  dependencies : dependencies_apps + [libhailort_dep, reference_camera_dep, tappas_general_dep],
+  gnu_symbol_visibility : 'default',
+  install: true,
+  install_dir: file_source_to_udp_install_dir,
+)
