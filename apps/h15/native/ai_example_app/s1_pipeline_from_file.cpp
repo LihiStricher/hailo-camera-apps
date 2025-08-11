@@ -1,7 +1,4 @@
-/**
- * @file main.cpp
- * @brief File Source to UDP Case Study - Minimal pipeline: FileSourceStage -> EncoderStage -> UdpStage
- */
+
 
 #include <iostream>
 #include <fstream>
@@ -21,6 +18,30 @@
 #include "udp_stage.hpp"
 #include "file_source_stage.hpp"
 #include "pipeline_builder.hpp"
+#include "overlay_stage.hpp"
+#include "ai_stage.hpp"
+#include "dsp_stages.hpp"
+#include "postprocess_stage.hpp"
+#include "aggregator_stage.hpp"
+
+#define PERSON_DET_RESIZE_STAGE "person_detection_resize_stage"
+#define PERSON_DET_RESIZE_INPUT_WIDTH 1920
+#define PERSON_DET_RESIZE_INPUT_HEIGHT 1080
+#define PERSON_DET_RESIZE_OUTPUT_WIDTH 640
+#define PERSON_DET_RESIZE_OUTPUT_HEIGHT 640
+std::vector<HailoBBox> PERSON_DET_TILE = {{0.0, 0.0, 1.0, 1.0}};
+
+#define YOLO_HEF_FILE "/home/root/apps/s1_demo/resources/yolov7.hef"
+#define DETECTION_AI_STAGE "yolo_detection"
+// Detection Postprocess Params
+#define POST_STAGE "yolo_post"
+#define YOLO_POST_SO "/usr/lib/hailo-post-processes/libyolo_hailortpp_post.so"
+#define YOLO_FUNC_NAME "yolov7"
+
+#define AFTER_RESIZE_AGGREGATOR_STAGE "after_resize_aggregator"
+
+#define LANDMARKS_RANGE_MIN 36
+#define LANDMARKS_RANGE_MAX 47
 
 
 std::mutex g_stop_mutex;
@@ -201,12 +222,39 @@ void create_pipeline(const PipelineConfig &config, std::shared_ptr<AppResources>
     }
     udp_stage->configure(config.host, config.port, EncodingType::H264);
 
+
+    std::shared_ptr<TillingCropStage> person_det_resize_stage = std::make_shared<TillingCropStage>(PERSON_DET_RESIZE_STAGE, 51, PERSON_DET_RESIZE_INPUT_WIDTH, PERSON_DET_RESIZE_INPUT_HEIGHT,
+                                                                                         PERSON_DET_RESIZE_OUTPUT_WIDTH, PERSON_DET_RESIZE_OUTPUT_HEIGHT,
+                                                                                         AFTER_RESIZE_AGGREGATOR_STAGE, DETECTION_AI_STAGE, PERSON_DET_TILE,
+                                                                                         5, true, app_resources->print_fps, StagePoolMode::BLOCKING);
+    std::shared_ptr<HailortAsyncStage> yolo_detection_stage = std::make_shared<HailortAsyncStage>(DETECTION_AI_STAGE, YOLO_HEF_FILE, 5, 52, "device0", 5, 10, 5, false,
+                                                                                             std::chrono::milliseconds(100), app_resources->print_fps, StagePoolMode::BLOCKING);
+    std::shared_ptr<PostprocessStage> yolo_post_stage = std::make_shared<PostprocessStage>(POST_STAGE, YOLO_POST_SO, YOLO_FUNC_NAME, "", 5, false, app_resources->print_fps);
+    std::shared_ptr<AggregatorStage> after_resize_agg_stage = std::make_shared<AggregatorStage>(AFTER_RESIZE_AGGREGATOR_STAGE, true, 1,
+                                                                                          PERSON_DET_RESIZE_STAGE, 2, false,
+                                                                                          POST_STAGE, 5, false,
+                                                                                          true, false, 0.3, 0.1,
+                                                                                          app_resources->print_fps);
+    std::shared_ptr<OverlayStage> overlay_stage = std::make_shared<OverlayStage>("overlay_stage", app_resources->skip_drawing, !app_resources->full_landmarks, LANDMARKS_RANGE_MIN, LANDMARKS_RANGE_MAX, 1, false, app_resources->print_fps);
+
+
     app_resources->pipeline->add_stage(file_source_stage);
     app_resources->pipeline->add_stage(encoder_stage);
     app_resources->pipeline->add_stage(udp_stage);
 
+    app_resources->pipeline->add_stage(person_det_resize_stage);
+    app_resources->pipeline->add_stage(yolo_detection_stage);
+    app_resources->pipeline->add_stage(yolo_post_stage);
+    app_resources->pipeline->add_stage(after_resize_agg_stage);
+    app_resources->pipeline->add_stage(overlay_stage);
 
-    file_source_stage->add_subscriber(encoder_stage);
+    file_source_stage->add_subscriber(person_det_resize_stage);
+    person_det_resize_stage->add_subscriber(yolo_detection_stage);
+    person_det_resize_stage->add_subscriber(after_resize_agg_stage);
+    yolo_detection_stage->add_subscriber(yolo_post_stage);
+    yolo_post_stage->add_subscriber(after_resize_agg_stage);
+    after_resize_agg_stage->add_subscriber(overlay_stage);
+    overlay_stage->add_subscriber(encoder_stage);
     encoder_stage->add_subscriber(udp_stage);
 }
 
