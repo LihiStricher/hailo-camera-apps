@@ -175,6 +175,12 @@ public:
         if (m_static_sub_frames >= 0)
         {
             num_subframes = m_static_sub_frames; // Static settings override metadata
+            std::vector<MetadataPtr> metadata = main_buffer->get_metadata_of_type(MetadataType::EXPECTED_CROPS);
+            if (metadata.size() > 0)
+            {
+                CroppingMetadataPtr cropping_metadata = std::dynamic_pointer_cast<CroppingMetadata>(metadata[0]);
+                main_buffer->remove_metadata(cropping_metadata);
+            }
         } else {
             std::vector<MetadataPtr> metadata = main_buffer->get_metadata_of_type(MetadataType::EXPECTED_CROPS);
             if (metadata.size() > 0)
