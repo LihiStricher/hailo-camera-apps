@@ -3,6 +3,7 @@
 // General includes
 #include <algorithm>
 #include <iostream>
+#include <chrono>
 
 // Media-Library includes
 #include "media_library/encoder.hpp"
@@ -18,12 +19,15 @@
 class DropFrameStage : public ConnectedStage
 {
 private:
-    inline static int m_frame; ///< Static frame counter to track the number of frames processed. 
-    int fd_fps = 0; ///< Fire detection FPS, used to control the frame dropping rate.
+    int m_frame; ///< Static frame counter to track the number of frames processed. 
+    int fps = 0; ///< Target FPS, used to control the frame dropping rate.
+    int original_fps = 30; ///< Original input FPS.
+    
 public:
-    DropFrameStage(std::string name, size_t queue_size = 1, bool leaky = false, bool print_fps = false, int fd_fps = 3) : ConnectedStage(name, queue_size, leaky, print_fps)
+    DropFrameStage(std::string name, size_t queue_size = 1, bool leaky = false, bool print_fps = false, int fps = 3, int original_fps = 30) : ConnectedStage(name, queue_size, leaky, print_fps)
     {
-        this->fd_fps = fd_fps; // Set the fire detection FPS
+        this->fps = fps; // Set the target FPS
+        this->original_fps = original_fps; // Set the original input FPS
     }
 
 
@@ -39,15 +43,18 @@ public:
         return AppStatus::SUCCESS;
     }
 
-    AppStatus process(BufferPtr data)
-    {   
-        if(fd_fps <= 0)
+    AppStatus process(BufferPtr data) override
+    {
+        if(fps <= 0)
         {
             return AppStatus::SUCCESS;
         }
 
-        m_frame++;
-        if(m_frame % (15/fd_fps) != 0)
+        // if(m_stage_name == "ai_pipeline_drop_frames_stage"){
+        //     m_frame++;
+        // }
+        this->m_frame++;
+        if(this->m_frame % (original_fps/fps) != 0)
         {
             return AppStatus::SUCCESS; // Skip processing this frame
         }
