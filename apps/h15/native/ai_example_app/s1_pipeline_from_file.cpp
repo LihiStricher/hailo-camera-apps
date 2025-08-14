@@ -44,8 +44,8 @@
 #include "fire_detection_ai_stage.hpp"
 
 #define PERSON_DET_RESIZE_STAGE "person_detection_resize_stage"
-#define PERSON_DET_RESIZE_INPUT_WIDTH 1920
-#define PERSON_DET_RESIZE_INPUT_HEIGHT 1080
+#define PERSON_DET_RESIZE_INPUT_WIDTH RESOLUTION_WIDTH
+#define PERSON_DET_RESIZE_INPUT_HEIGHT RESOLUTION_HEIGHT
 #define PERSON_DET_RESIZE_OUTPUT_WIDTH 640
 #define PERSON_DET_RESIZE_OUTPUT_HEIGHT 640
 std::vector<HailoBBox> PERSON_DET_TILE = {{0.0, 0.0, 1.0, 1.0}};
@@ -76,15 +76,15 @@ std::vector<HailoBBox> PERSON_DET_TILE = {{0.0, 0.0, 1.0, 1.0}};
 // Person and Face cropping
 #define PERSON_BBOX_CROP_STAGE "person_bbox_crops"
 #define PERSON_BBOX_CROP_LABEL "person"
-#define PERSON_BBOX_CROP_INPUT_WIDTH 1920
-#define PERSON_BBOX_CROP_INPUT_HEIGHT 1080
+#define PERSON_BBOX_CROP_INPUT_WIDTH RESOLUTION_WIDTH
+#define PERSON_BBOX_CROP_INPUT_HEIGHT RESOLUTION_HEIGHT
 #define PERSON_BBOX_CROP_OUTPUT_WIDTH 320
 #define PERSON_BBOX_CROP_OUTPUT_HEIGHT 240
 
 #define FACE_BBOX_CROP_STAGE "face_bbox_crops"
 #define FACE_BBOX_CROP_LABEL "face"
-#define FACE_BBOX_CROP_INPUT_WIDTH 1920
-#define FACE_BBOX_CROP_INPUT_HEIGHT 1080
+#define FACE_BBOX_CROP_INPUT_WIDTH RESOLUTION_WIDTH
+#define FACE_BBOX_CROP_INPUT_HEIGHT RESOLUTION_HEIGHT
 #define FACE_BBOX_CROP_OUTPUT_WIDTH 120
 #define FACE_BBOX_CROP_OUTPUT_HEIGHT 120
 
@@ -127,6 +127,8 @@ std::vector<HailoBBox> FIRE_DET_TILES = {
 // Fire Detection FPS (can be made configurable later)
 int fire_detection_fps = 2; // Default fire detection FPS
 
+#define RESOLUTION_WIDTH 1920
+#define RESOLUTION_HEIGHT 1080
 
 std::mutex g_stop_mutex;
 std::condition_variable g_stop_cv;
