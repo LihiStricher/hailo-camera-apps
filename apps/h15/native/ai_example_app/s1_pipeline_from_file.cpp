@@ -102,7 +102,7 @@ std::vector<HailoBBox> PERSON_DET_TILE = {{0.0, 0.0, 1.0, 1.0}};
 #define TRACKER_STAGE "tracker"
 #define OUTPUT_METADATA_STAGE "output_metadata"
 
-#define LANDMARKS_RANGE_MIN 36
+#define LANDMARKS_RANGE_MIN 1
 #define LANDMARKS_RANGE_MAX 47
 
 // Fire Detection Defines
@@ -166,7 +166,7 @@ struct AppResources
         print_fps = false;
         print_latency = false;
         skip_drawing = false;
-        full_landmarks = false;
+        full_landmarks = true;
         medialib_config_path = "";
         media_library = nullptr;
     }
