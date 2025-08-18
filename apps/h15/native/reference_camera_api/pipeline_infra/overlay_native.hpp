@@ -376,7 +376,7 @@ overlay_status_t draw_all(HailoMat &hmat, HailoROIPtr roi, std::shared_ptr<Stage
         case HAILO_DETECTION:
         {
             HailoDetectionPtr detection = std::dynamic_pointer_cast<HailoDetection>(obj);
-            if (detection->get_label() == "person" || detection->get_label() == "face"  || detection->get_label() == "zone")
+            if (detection->get_label() == "person" || detection->get_label() == "face"  || detection->get_label() == "fire")
             {
                 cv::Scalar color = NO_GLOBAL_ID_COLOR;
                 std::string text = "";
@@ -397,10 +397,10 @@ overlay_status_t draw_all(HailoMat &hmat, HailoROIPtr roi, std::shared_ptr<Stage
                     text = get_detection_text(detection, show_confidence);
                 }
 
-                if (detection->get_label() == "zone")
+                if (detection->get_label() == "fire")
                 {
                     color = cv::Scalar(255, 0, 0);
-                    text = "";
+                    text = "Fire Detected";
                 }
 
                 // Draw Rectangle

@@ -40,10 +40,27 @@ executable('s1_pipeline',
 
 file_source_to_udp_install_dir = apps_install_dir + '/s1_demo'
 
-s1_pipeline_from_file_src = ['s1_pipeline_from_file.cpp']
+s1_personface_detection_from_file_src = ['s1_personface_detection_from_file.cpp']
 
-executable('s1_pipeline_from_file',
-  s1_pipeline_from_file_src,
+executable('s1_personface_detection_from_file',
+  s1_personface_detection_from_file_src,
+  cpp_args : hailo_lib_args,
+  dependencies : dependencies_apps + [libhailort_dep, reference_camera_dep, tappas_general_dep],
+  gnu_symbol_visibility : 'default',
+  install: true,
+  install_dir: file_source_to_udp_install_dir,
+)
+
+################################################
+# File Source to UDP Case Study
+################################################
+
+file_source_to_udp_install_dir = apps_install_dir + '/s1_demo'
+
+s1_fire_detection_from_file_src = ['s1_fire_detection_from_file.cpp']
+
+executable('s1_fire_detection_from_file',
+  s1_fire_detection_from_file_src,
   cpp_args : hailo_lib_args,
   dependencies : dependencies_apps + [libhailort_dep, reference_camera_dep, tappas_general_dep],
   gnu_symbol_visibility : 'default',

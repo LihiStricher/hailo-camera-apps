@@ -377,6 +377,16 @@ public:
                 std::string message = best_index + "," + std::to_string(confidence);
                 zmq_publisher.send(zmq::buffer(message), zmq::send_flags::none);
 
+                if (best_index == "0") {
+                    float bbox_xmin = 0.1;
+                    float bbox_ymin = 0.1;
+                    float bbox_xmax = 0.9;
+                    float bbox_ymax = 0.9;
+                    // add a detection that represents the fire
+                    HailoBBox fire_bbox = HailoBBox(bbox_xmin, bbox_ymin, bbox_xmax - bbox_xmin, bbox_ymax - bbox_ymin);
+                    hailo_common::add_detection(input_buffer->get_roi(), fire_bbox, "fire", NULL);
+                }
+
                 TensorMetadataPtr tensor_metadata = std::make_shared<TensorMetadata>(tensor_buffer, output.name());
                 input_buffer->add_metadata(tensor_metadata);
 

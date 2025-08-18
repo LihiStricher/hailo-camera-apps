@@ -41,7 +41,6 @@
 #include "drop_frames_stage.hpp"
 #include "file_source_stage.hpp"
 #include "pipeline_builder.hpp"
-#include "fire_detection_ai_stage.hpp"
 
 #define PERSON_DET_RESIZE_STAGE "person_detection_resize_stage"
 #define PERSON_DET_RESIZE_INPUT_WIDTH RESOLUTION_WIDTH
@@ -96,7 +95,6 @@ std::vector<HailoBBox> PERSON_DET_TILE = {{0.0, 0.0, 1.0, 1.0}};
 
 // Tee stages
 #define TEE_STAGE "vision_tee"
-#define DEMO_TEE_STAGE "demo_tee"
 
 // Tracker and output stages
 #define TRACKER_STAGE "tracker"
@@ -104,28 +102,6 @@ std::vector<HailoBBox> PERSON_DET_TILE = {{0.0, 0.0, 1.0, 1.0}};
 
 #define LANDMARKS_RANGE_MIN 1
 #define LANDMARKS_RANGE_MAX 47
-
-// Fire Detection Defines
-#define CLIP_HEF_FILE "/home/root/apps/s1_demo/resources/rgb_clip_convnext_visual_256.hef"
-#define CLIP_AI_STAGE "fire_detection"
-#define FIRE_DET_TILLING_STAGE "fire_detection_tilling_stage"
-#define FIRE_DET_TILLING_INPUT_WIDTH 1920
-#define FIRE_DET_TILLING_INPUT_HEIGHT 1080
-#define FIRE_DET_TILLING_OUTPUT_WIDTH 256
-#define FIRE_DET_TILLING_OUTPUT_HEIGHT 256
-std::vector<HailoBBox> FIRE_DET_TILES = {
-    {0.0, 0.0, 0.333, 0.5},   // top-left
-    {0.333, 0.0, 0.333, 0.5}, // top-middle
-    {0.666, 0.0, 0.333, 0.5}, // top-right
-    {0.0, 0.5, 0.333, 0.5},   // bottom-left
-    {0.333, 0.5, 0.333, 0.5}, // bottom-middle
-    {0.666, 0.5, 0.333, 0.5}  // bottom-right
-};
-#define FIRE_DET_TILLING_AGGREGATOR_STAGE "fire_det_tiling_aggregator"
-#define CONVERT_STAGE "convert"
-
-// Fire Detection FPS (can be made configurable later)
-int fire_detection_fps = 2; // Default fire detection FPS
 
 #define RESOLUTION_WIDTH 1920
 #define RESOLUTION_HEIGHT 1080
@@ -311,7 +287,6 @@ void create_pipeline(const PipelineConfig &config, std::shared_ptr<AppResources>
 
     // Create Tee stages for branching the pipeline
     std::shared_ptr<TeeStage> tee_stage = std::make_shared<TeeStage>(TEE_STAGE, 5, true, app_resources->print_fps);
-    std::shared_ptr<TeeStage> demo_tee_stage = std::make_shared<TeeStage>(DEMO_TEE_STAGE, 5, true, app_resources->print_fps);
     std::shared_ptr<TeeStage> ai_tee = std::make_shared<TeeStage>("ai_tee", 5, true, app_resources->print_fps);
     std::shared_ptr<DropFrameStage> ai_pipeline_drop_frames_stage = std::make_shared<DropFrameStage>(
         "ai_pipeline_drop_frames_stage", 5, true, app_resources->print_fps, 15); // 15 FPS for the person detection 
@@ -407,29 +382,6 @@ void create_pipeline(const PipelineConfig &config, std::shared_ptr<AppResources>
         "overlay_stage", app_resources->skip_drawing, !app_resources->full_landmarks, 
         LANDMARKS_RANGE_MIN, LANDMARKS_RANGE_MAX, 1, false, app_resources->print_fps);
 
-    // Fire Detection Pipeline
-    std::shared_ptr<DropFrameStage> fire_drop_frames_stage = std::make_shared<DropFrameStage>(
-        "fire_drop_frames", 5, true, app_resources->print_fps, fire_detection_fps, 15);
-    
-    std::shared_ptr<TillingCropStage> fire_detection_tilling_stage = std::make_shared<TillingCropStage>(
-        FIRE_DET_TILLING_STAGE, 55, FIRE_DET_TILLING_INPUT_WIDTH, FIRE_DET_TILLING_INPUT_HEIGHT,
-        FIRE_DET_TILLING_OUTPUT_WIDTH, FIRE_DET_TILLING_OUTPUT_HEIGHT,
-        FIRE_DET_TILLING_AGGREGATOR_STAGE, CONVERT_STAGE, FIRE_DET_TILES,
-        5, true, app_resources->print_fps, StagePoolMode::BLOCKING);
-    
-    std::shared_ptr<DspConvertStage> convert_stage = std::make_shared<DspConvertStage>(CONVERT_STAGE, 30);
-    
-    std::shared_ptr<FireDetectionHailortAsyncStage> fire_detection_stage = std::make_shared<FireDetectionHailortAsyncStage>(
-        CLIP_AI_STAGE, CLIP_HEF_FILE, 6, 54, "device0", 6, 10, 6, false,
-        std::chrono::milliseconds(100), app_resources->print_fps, StagePoolMode::BLOCKING);
-    
-    std::shared_ptr<AggregatorStage> fire_detection_tiling_agg_stage = std::make_shared<AggregatorStage>(
-        FIRE_DET_TILLING_AGGREGATOR_STAGE, false,
-        FIRE_DET_TILLING_STAGE, 6, true,
-        CLIP_AI_STAGE, 20, false,
-        true, false, 0.3, 0.1,
-        app_resources->print_fps, std::chrono::milliseconds(66));
-
     // Add all stages to pipeline
     app_resources->pipeline->add_stage(file_source_stage);
     app_resources->pipeline->add_stage(encoder_stage);
@@ -437,7 +389,6 @@ void create_pipeline(const PipelineConfig &config, std::shared_ptr<AppResources>
     
     // Add tee stages
     app_resources->pipeline->add_stage(tee_stage);
-    app_resources->pipeline->add_stage(demo_tee_stage);
     app_resources->pipeline->add_stage(ai_tee);
     app_resources->pipeline->add_stage(ai_pipeline_drop_frames_stage);
 
@@ -466,29 +417,12 @@ void create_pipeline(const PipelineConfig &config, std::shared_ptr<AppResources>
     app_resources->pipeline->add_stage(output_metadata_stage);
     app_resources->pipeline->add_stage(overlay_stage);
 
-    // Add fire detection stages
-    app_resources->pipeline->add_stage(fire_drop_frames_stage);
-    app_resources->pipeline->add_stage(fire_detection_tilling_stage);
-    app_resources->pipeline->add_stage(convert_stage);
-    app_resources->pipeline->add_stage(fire_detection_stage);
-    app_resources->pipeline->add_stage(fire_detection_tiling_agg_stage);
-
     // Connect file source to tee vision
     file_source_stage->add_subscriber(ai_tee);
     ai_tee->add_subscriber(tee_stage);
     ai_tee->add_subscriber(ai_pipeline_drop_frames_stage); 
 
-    ai_pipeline_drop_frames_stage->add_subscriber(demo_tee_stage); 
-
-    demo_tee_stage->add_subscriber(fire_drop_frames_stage); 
-    demo_tee_stage->add_subscriber(person_det_resize_stage);
-
-    // Fire detection pipeline connections
-    fire_drop_frames_stage->add_subscriber(fire_detection_tilling_stage);
-    fire_detection_tilling_stage->add_subscriber(fire_detection_tiling_agg_stage);
-    fire_detection_tilling_stage->add_subscriber(convert_stage);
-    convert_stage->add_subscriber(fire_detection_stage);
-    fire_detection_stage->add_subscriber(fire_detection_tiling_agg_stage);
+    ai_pipeline_drop_frames_stage->add_subscriber(person_det_resize_stage);
 
     // Person detection connections
     person_det_resize_stage->add_subscriber(after_resize_agg_stage);
