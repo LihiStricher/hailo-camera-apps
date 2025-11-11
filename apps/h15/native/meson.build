@@ -105,7 +105,10 @@ encoder_dep = dependency('hailo_encoder', method : 'pkg-config')
 gstmedialibrary_utils_dep = dependency('gstmedialibutils', method : 'pkg-config')
 gyro_lib_dep = dependency('hailo_media_library_gyro', method : 'pkg-config')
 
-dependencies_apps = gst_deps + media_library_encoder_dep + media_library_common_dep + media_library_frontend_dep + encoder_dep + media_library_api_dep + gstmedialibrary_utils_dep + gyro_lib_dep
+# ZMQ dep
+zmq_dep = dependency('libzmq', method : 'pkg-config')
+
+dependencies_apps = gst_deps + media_library_encoder_dep + media_library_common_dep + media_library_frontend_dep + encoder_dep + media_library_api_dep + gstmedialibrary_utils_dep + gyro_lib_dep + zmq_dep
 
 target = get_option('target')
 

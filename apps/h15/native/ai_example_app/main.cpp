@@ -21,7 +21,7 @@
 #include "dsp_stages.hpp"
 #include "postprocess_stage.hpp"
 #include "overlay_stage.hpp"
-#include "udp_stage.hpp"
+#include "rtsp_stage.hpp"
 #include "encoder_stage.hpp"
 #include "frontend_stage.hpp"
 #include "lightweight_tracker_stage.hpp"
@@ -29,6 +29,7 @@
 #include "aggregator_stage.hpp"
 #include "reference_camera_logger.hpp"
 #include "pipeline_builder.hpp"
+#include "output_metadata_stage.hpp"
 
 // Frontend Params
 #define FRONTEND_STAGE "frontend_stage"
@@ -40,7 +41,13 @@
 
 // Output Params
 #define HOST_IP "10.0.0.2"
+#define RTSP_PORT "8554"
+#define RTSP_PORT_2 "8888"
+#define RTSP_MOUNT_POINT "cem"
+#define RTSP_PROTOCOLS "tcp"
+#define RTSP_LATENCY 0
 #define TRACKER_STAGE "tracker"
+#define OUTPUT_METADATA_STAGE "output_metadata"
 #define OVERLAY_STAGE "overlay"
 
 /*
@@ -211,7 +218,7 @@ struct AppResources
     std::shared_ptr<MediaLibrary> media_library;
     std::shared_ptr<FrontendStage> frontend;
     std::map<output_stream_id_t, std::shared_ptr<EncoderStage>> encoders;
-    std::map<output_stream_id_t, std::shared_ptr<UdpStage>> udp_outputs;
+    std::map<output_stream_id_t, std::shared_ptr<RtspStage>> rtsp_outputs;
     PipelinePtr pipeline;
     bool print_fps;
     bool print_latency;
@@ -226,7 +233,7 @@ struct AppResources
         frontend = nullptr;
         pipeline = nullptr;
         encoders.clear();
-        udp_outputs.clear();
+        rtsp_outputs.clear();
         print_fps = false;
         print_latency = false;
         skip_drawing = false;
@@ -256,15 +263,15 @@ std::string read_string_from_file(const char *file_path)
 }
 
 /**
- * @brief Create and configure an encoder and its corresponding UDP output file.
+ * @brief Create and configure an encoder and its corresponding RTSP output.
  *
- * This function sets up an encoder and a UDP output module for a given stream ID.
- * It reads configuration files and initializes the encoder and UDP module accordingly.
+ * This function sets up an encoder and an RTSP output module for a given stream ID.
+ * It reads configuration files and initializes the encoder and RTSP module accordingly.
  *
  * @param id The ID of the output stream.
  * @param app_resources Shared pointer to the application's resources.
  */
-void create_encoder_and_udp(const std::string &id, std::shared_ptr<AppResources> app_resources)
+void create_encoder_and_rtsp(const std::string &id, std::shared_ptr<AppResources> app_resources)
 {
     // Create and configure encoder
     std::string enc_name = "enc_" + id;
@@ -279,17 +286,18 @@ void create_encoder_and_udp(const std::string &id, std::shared_ptr<AppResources>
         throw std::runtime_error("Failed to configure encoder");
     }
 
-    // Create and conifgure udp
-    std::string udp_name = "udp_" + id;
-    std::cout << "Creating udp " << udp_name << std::endl;
-    std::shared_ptr<UdpStage> udp_stage =
-        UdpStageBuild::create().set_stage_name(udp_name).set_leaky_opt(false).set_printfps_opt(true).buildptr();
-    app_resources->udp_outputs[id] = udp_stage;
-    AppStatus udp_config_status = udp_stage->configure(app_resources->host_ip, PORT_FROM_ID(id), EncodingType::H264);
-    if (udp_config_status != AppStatus::SUCCESS)
+    // Create and configure RTSP
+    std::string rtsp_name = "rtsp_" + id;
+    std::cout << "Creating rtsp " << rtsp_name << std::endl;
+    std::string rtsp_location = "rtsp://" + app_resources->host_ip + ":" + RTSP_PORT + "/" + RTSP_MOUNT_POINT;
+    std::shared_ptr<RtspStage> rtsp_stage =
+        RtspStageBuild::create().set_stage_name(rtsp_name).set_leaky_opt(false).set_printfps_opt(true).buildptr();
+    app_resources->rtsp_outputs[id] = rtsp_stage;
+    AppStatus rtsp_config_status = rtsp_stage->configure(rtsp_location, RTSP_PROTOCOLS, RTSP_LATENCY, EncodingType::H264);
+    if (rtsp_config_status != AppStatus::SUCCESS)
     {
-        std::cerr << "Failed to configure udp " << udp_name << std::endl;
-        throw std::runtime_error("Failed to configure udp");
+        std::cerr << "Failed to configure rtsp " << rtsp_name << std::endl;
+        throw std::runtime_error("Failed to configure rtsp");
     }
 }
 
@@ -339,7 +347,7 @@ void configure_frontend_and_encoders(std::shared_ptr<AppResources> app_resources
             // AI pipeline does not get an encoder since it is merged into 4K
             continue;
         }
-        create_encoder_and_udp(s.id, app_resources);
+        create_encoder_and_rtsp(s.id, app_resources);
     }
 }
 
@@ -602,6 +610,9 @@ void create_main_pipeline(std::shared_ptr<AppResources> app_resources)
                                                                      .set_copy_nested_objects(true, 2)
                                                                      .buildptr();
 
+        std::shared_ptr<OutputMetadataStage> output_metadata_stage = std::make_shared<OutputMetadataStage>(
+            OUTPUT_METADATA_STAGE, 1, false, app_resources->print_fps);
+
         std::shared_ptr<OverlayStage> overlay_stage = OverlayStageBuild::create()
                                                           .set_stage_name(OVERLAY_STAGE)
                                                           .set_skip_opt(app_resources->skip_drawing)
@@ -633,17 +644,18 @@ void create_main_pipeline(std::shared_ptr<AppResources> app_resources)
             .add_stage(landmarks_post_stage)
             .add_stage(landmarks_agg_stage)
             .add_stage(tracker_stage)
+            .add_stage(output_metadata_stage)
             .add_stage(overlay_stage);
 
-        // Add encoder and udp to stage (except AI_SINK)
+        // Add encoder and rtsp to stage (except AI_SINK)
         for (auto s : streams.value())
         {
             // AI_SINK does not get an encoder since it is merged into 4K
             if (s.id != AI_SINK)
             {
-                // Add encoder/udp to pipeline stage
+                // Add encoder/rtsp to pipeline stage
                 pip_builder.add_stage(app_resources->encoders[s.id], StageType::SINK)
-                    .add_stage(app_resources->udp_outputs[s.id], StageType::SINK);
+                    .add_stage(app_resources->rtsp_outputs[s.id], StageType::SINK);
             }
         }
 
@@ -694,7 +706,8 @@ void create_main_pipeline(std::shared_ptr<AppResources> app_resources)
 
         // Vision Pipeline stages
         pip_builder.connect(STAGE_2_AGGREGATOR, TRACKER_STAGE)
-            .connect(TRACKER_STAGE, OVERLAY_STAGE)
+            .connect(TRACKER_STAGE, OUTPUT_METADATA_STAGE)
+            .connect(OUTPUT_METADATA_STAGE, OVERLAY_STAGE)
             .connect(OVERLAY_STAGE, app_resources->encoders[VISION_SINK]->get_name());
 
         // Stream Out pipeline stages
@@ -704,7 +717,7 @@ void create_main_pipeline(std::shared_ptr<AppResources> app_resources)
             if (s.id != AI_SINK)
             {
                 pip_builder.connect(app_resources->encoders[s.id]->get_name(),
-                                    app_resources->udp_outputs[s.id]->get_name());
+                                    app_resources->rtsp_outputs[s.id]->get_name());
             }
         }
 
@@ -733,6 +746,7 @@ void create_main_pipeline(std::shared_ptr<AppResources> app_resources)
 int main(int argc, char *argv[])
 {
     {
+        std::cout << "S1 pipeline" << std::endl;
         // App resources
         std::shared_ptr<AppResources> app_resources = std::make_shared<AppResources>();
         app_resources->medialib_config_path = MEDIALIB_CONFIG_PATH;
