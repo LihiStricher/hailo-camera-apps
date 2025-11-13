@@ -120,17 +120,17 @@ inline std::string RtspModule::create_pipeline_string()
                "queue name=" +
                std::string(RTSP_SRC_QUEUE_NAME) + " leaky=no max-size-buffers=1 max-size-bytes=0 max-size-time=0 ! " +
                caps2.str() + " ! " +
-               "h264parse config-interval=-1 ! " +
+               "h264parse ! " +
                caps2.str() + " ! " +
                "tee name=rtsp_tee "
                "rtsp_tee. ! "
                "queue leaky=no max-size-buffers=2 max-size-bytes=0 max-size-time=0 ! " +
                rtsp_sink.str() +
-               " name=rtsp_sink sync=true "
+               " name=rtsp_sink "
                "rtsp_tee. ! "
                "queue leaky=no max-size-buffers=2 max-size-bytes=0 max-size-time=0 ! "
                "fpsdisplaysink fps-update-interval=2000 signal-fps-measurements=true name=fpsdisplaysink "
-               "text-overlay=false sync=true video-sink=fakesink ";
+               "text-overlay=false video-sink=fakesink ";
 
     REFERENCE_CAMERA_LOG_INFO("Pipeline: {}", pipeline);
 

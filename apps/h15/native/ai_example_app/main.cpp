@@ -289,7 +289,7 @@ void create_encoder_and_rtsp(const std::string &id, std::shared_ptr<AppResources
     // Create and configure RTSP
     std::string rtsp_name = "rtsp_" + id;
     std::cout << "Creating rtsp " << rtsp_name << std::endl;
-    std::string rtsp_location = "rtsp://" + app_resources->host_ip + ":" + RTSP_PORT + "/" + RTSP_MOUNT_POINT;
+    std::string rtsp_location = "rtsp://" + app_resources->host_ip + ":" + RTSP_PORT + "/" + RTSP_MOUNT_POINT + id;
     std::shared_ptr<RtspStage> rtsp_stage =
         RtspStageBuild::create().set_stage_name(rtsp_name).set_leaky_opt(false).set_printfps_opt(true).buildptr();
     app_resources->rtsp_outputs[id] = rtsp_stage;
