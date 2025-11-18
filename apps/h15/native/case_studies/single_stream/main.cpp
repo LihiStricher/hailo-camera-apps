@@ -15,19 +15,16 @@
 
 // infra includes
 #include "pipeline.hpp"
-#include "udp_stage.hpp"
-#include "encoder_stage.hpp"
+#include "kms_stage.hpp"
 #include "frontend_stage.hpp"
 #include "reference_camera_logger.hpp"
+#include "dsp_convert_stage.hpp"
 
 // Stage Params
 #define FRONTEND_STAGE "frontend_stage"
-#define HOST_IP "10.0.0.2"
+#define KMS_DRIVER_NAME "hailo-drm"
 #define NO_PROFILE_SELECTED ""
 #define MEDIALIB_CONFIG_PATH "/etc/imaging/cfg/medialib_configs/case_studies/single_stream_medialib_config.json"
-
-// Macro that turns coverts stream ids to port #s
-#define PORT_FROM_ID(id) std::to_string(5000 + std::stoi(id.substr(4)) * 2)
 
 enum class ArgumentType
 {
@@ -37,7 +34,6 @@ enum class ArgumentType
     Timeout,
     Config,
     Profile,
-    HostIP,
     Error
 };
 
@@ -61,9 +57,7 @@ cxxopts::Options build_arg_parser()
     ("c,config-file-path", "Media library configuration path", 
         cxxopts::value<std::string>()->default_value(MEDIALIB_CONFIG_PATH))
     ("a,profile", "Profile name", 
-        cxxopts::value<std::string>()->default_value(NO_PROFILE_SELECTED))
-    ("o,host-ip", "Host IP address for UDP output", 
-        cxxopts::value<std::string>()->default_value(HOST_IP));
+        cxxopts::value<std::string>()->default_value(NO_PROFILE_SELECTED));
     // clang-format on
 
     return options;
@@ -104,11 +98,6 @@ std::vector<ArgumentType> handle_arguments(const cxxopts::ParseResult &result, c
         arguments.push_back(ArgumentType::Profile);
     }
 
-    if (result.count("host-ip"))
-    {
-        arguments.push_back(ArgumentType::HostIP);
-    }
-
     // Handle unrecognized options
     for (const auto &unrecognized : result.unmatched())
     {
@@ -130,27 +119,25 @@ struct AppResources
 {
     std::shared_ptr<MediaLibrary> media_library;
     std::shared_ptr<FrontendStage> frontend;
-    std::map<output_stream_id_t, std::shared_ptr<EncoderStage>> encoders;
-    std::map<output_stream_id_t, std::shared_ptr<UdpStage>> udp_outputs;
+    std::shared_ptr<DspConvertStage> dsp_convert;
+    std::shared_ptr<KmsStage> kms_output;
     PipelinePtr pipeline;
     bool print_fps;
     bool print_latency;
     std::string medialib_config_path;
     std::string profile_name;
-    std::string host_ip = HOST_IP;
 
     void clear()
     {
         frontend = nullptr;
+        dsp_convert = nullptr;
+        kms_output = nullptr;
         pipeline = nullptr;
-        encoders.clear();
-        udp_outputs.clear();
         print_fps = false;
         print_latency = false;
         medialib_config_path = "";
         media_library = nullptr;
         profile_name = NO_PROFILE_SELECTED;
-        host_ip = HOST_IP;
     }
 
     ~AppResources()
@@ -175,9 +162,8 @@ std::string read_string_from_file(const char *file_path)
  * @brief Subscribe elements within the application pipeline.
  *
  * This function subscribes the output streams from the frontend to appropriate
- * pipeline stages and encoders, ensuring that the data flows correctly through
- * the pipeline. It sets up callbacks for handling the data and integrates encoders
- * with UDP outputs.
+ * pipeline stages, ensuring that the data flows correctly through the pipeline.
+ * The data flows from frontend -> DSP convert -> KMS output for display.
  *
  * @param app_resources Shared pointer to the application's resources.
  */
@@ -195,63 +181,84 @@ void subscribe_to_frontend(std::shared_ptr<AppResources> app_resources)
     for (auto s : streams.value())
     {
         std::cout << "subscribing to frontend for '" << s.id << "'" << std::endl;
-        // Subscribe encoder to frontend
-        app_resources->frontend->subscribe_to_stream(s.id, app_resources->encoders[s.id]);
+        // Subscribe DSP convert stage to frontend
+        if (app_resources->dsp_convert)
+        {
+            app_resources->frontend->subscribe_to_stream(s.id, app_resources->dsp_convert);
+            // Subscribe KMS output to DSP convert stage output
+            app_resources->dsp_convert->add_subscriber(app_resources->kms_output);
+        }
+        else
+        {
+            // If DSP convert is not enabled, subscribe KMS directly to frontend
+            app_resources->frontend->subscribe_to_stream(s.id, app_resources->kms_output);
+        }
     }
 }
 
 /**
- * @brief Create and configure an encoder and its corresponding UDP output file.
+ * @brief Create and configure the KMS output stage for display.
  *
- * This function sets up an encoder and a UDP output module for a given stream ID.
- * It reads configuration files and initializes the encoder and UDP module accordingly.
+ * This function sets up the KMS (Kernel Mode Setting) stage for displaying
+ * the video on the screen using the specified display driver.
  *
- * @param id The ID of the output stream.
  * @param app_resources Shared pointer to the application's resources.
  */
-void create_encoder_and_udp(const std::string &id, std::shared_ptr<AppResources> app_resources)
+void create_kms_output(std::shared_ptr<AppResources> app_resources)
 {
-    // Create and configure encoder
-    std::string enc_name = "enc_" + id;
-    std::cout << "Creating encoder " << enc_name << std::endl;
-    std::shared_ptr<EncoderStage> encoder_stage = std::make_shared<EncoderStage>(enc_name);
-    app_resources->encoders[id] = encoder_stage;
-    AppStatus enc_config_status = encoder_stage->configure(app_resources->media_library->m_encoders[id]);
-    if (enc_config_status != AppStatus::SUCCESS)
+    // Create and configure KMS stage
+    std::string kms_name = "kms_output";
+    std::cout << "Creating KMS output stage " << kms_name << std::endl;
+    std::shared_ptr<KmsStage> kms_stage = std::make_shared<KmsStage>(kms_name);
+    app_resources->kms_output = kms_stage;
+    
+    AppStatus kms_config_status = kms_stage->configure(KMS_DRIVER_NAME, false, true, EncodingType::H264);
+    if (kms_config_status != AppStatus::SUCCESS)
     {
-        std::cerr << "Failed to configure encoder " << enc_name << std::endl;
-        throw std::runtime_error("Failed to configure encoder");
+        std::cerr << "Failed to configure KMS stage " << kms_name << std::endl;
+        throw std::runtime_error("Failed to configure KMS stage");
     }
 
-    // Create and conifgure udp
-    std::string udp_name = "udp_" + id;
-    std::cout << "Creating udp " << udp_name << std::endl;
-    std::shared_ptr<UdpStage> udp_stage = std::make_shared<UdpStage>(udp_name);
-    app_resources->udp_outputs[id] = udp_stage;
-    AppStatus udp_config_status = udp_stage->configure(app_resources->host_ip, PORT_FROM_ID(id), EncodingType::H264);
-    if (udp_config_status != AppStatus::SUCCESS)
-    {
-        std::cerr << "Failed to configure udp " << udp_name << std::endl;
-        throw std::runtime_error("Failed to configure udp");
-    }
-
-    // Add encoder/udp to pipeline
-    app_resources->pipeline->add_stage(app_resources->encoders[id], StageType::SINK);
-    app_resources->pipeline->add_stage(app_resources->udp_outputs[id], StageType::SINK);
-
-    // Subscribe udp to encoder
-    app_resources->encoders[id]->add_subscriber(app_resources->udp_outputs[id]);
+    // Add KMS stage to pipeline as a sink
+    app_resources->pipeline->add_stage(app_resources->kms_output, StageType::SINK);
 }
 
 /**
- * @brief Configure the frontend and encoders for the application.
+ * @brief Configure the DSP convert stage for format conversion.
  *
- * This function initializes the frontend and sets up encoders for each output stream
- * from the frontend. It reads configuration files to properly configure the components.
+ * This function initializes and configures the DSP convert stage to convert
+ * input frames to the desired output format (e.g., RGB/BGR).
+ *
+ * @param app_resources Shared pointer to the application's resources.
+ * @param width Width of the frames.
+ * @param height Height of the frames.
+ * @param output_format Output format for conversion.
+ */
+void configure_dsp_convert_stage(std::shared_ptr<AppResources> app_resources, 
+                                 int width, int height, 
+                                 HailoFormat output_format = HAILO_FORMAT_RGB)
+{
+    std::cout << "Creating DSP convert stage" << std::endl;
+    app_resources->dsp_convert = std::make_shared<DspConvertStage>("dsp_convert_stage");
+    app_resources->pipeline->add_stage(app_resources->dsp_convert, StageType::GENERAL);
+    
+    AppStatus dsp_config_status = app_resources->dsp_convert->configure(width, height, output_format);
+    if (dsp_config_status != AppStatus::SUCCESS)
+    {
+        std::cerr << "Failed to configure DSP convert stage" << std::endl;
+        throw std::runtime_error("Failed to configure DSP convert stage");
+    }
+}
+
+/**
+ * @brief Configure the frontend and output stages for the application.
+ *
+ * This function initializes the frontend and sets up the DSP convert and KMS output stages.
+ * It reads configuration files to properly configure the components.
  *
  * @param app_resources Shared pointer to the application's resources.
  */
-void configure_frontend_and_encoders(std::shared_ptr<AppResources> app_resources)
+void configure_frontend_and_output(std::shared_ptr<AppResources> app_resources)
 {
     std::string medialib_config_string = read_string_from_file(app_resources->medialib_config_path.c_str());
     auto media_lib_expected = MediaLibrary::create();
@@ -288,11 +295,16 @@ void configure_frontend_and_encoders(std::shared_ptr<AppResources> app_resources
         throw std::runtime_error("Failed to get stream ids");
     }
 
-    // Create encoders and output files for each stream
-    for (auto s : streams.value())
+    // Configure DSP convert stage with dimensions from frontend
+    if (!streams.value().empty())
     {
-        create_encoder_and_udp(s.id, app_resources);
+        int width = streams.value()[0].width;
+        int height = streams.value()[0].height;
+        configure_dsp_convert_stage(app_resources, width, height, HAILO_FORMAT_RGB);
     }
+
+    // Create KMS output stage
+    create_kms_output(app_resources);
 }
 
 /**
@@ -349,9 +361,6 @@ int main(int argc, char *argv[])
         case ArgumentType::Profile:
             app_resources->profile_name = result["profile"].as<std::string>();
             break;
-        case ArgumentType::HostIP:
-            app_resources->host_ip = result["host-ip"].as<std::string>();
-            break;
         case ArgumentType::Error:
             return 1;
         }
@@ -360,8 +369,8 @@ int main(int argc, char *argv[])
     // Create pipeline
     app_resources->pipeline = std::make_shared<Pipeline>();
 
-    // Configure frontend and encoders
-    configure_frontend_and_encoders(app_resources);
+    // Configure frontend and output stages
+    configure_frontend_and_output(app_resources);
 
     // Subscribe stages to frontend
     subscribe_to_frontend(app_resources);
