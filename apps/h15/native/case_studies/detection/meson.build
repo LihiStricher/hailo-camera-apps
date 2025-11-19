@@ -15,5 +15,16 @@ executable('detection_case_study',
   install_dir: detection_install_dir,
 )
 
+qwen2_vl_demo_src = ['qwen2_vl_demo.cpp']
+
+executable('qwen2_vl_demo',
+  qwen2_vl_demo_src,
+  cpp_args : hailo_lib_args,
+  dependencies : dependencies_apps + [libhailort_dep, reference_camera_dep, tappas_general_dep, image_dep],
+  gnu_symbol_visibility : 'default',
+  install: true,
+  install_dir: detection_install_dir,
+)
+
 # install json config files
 install_subdir('configs', install_dir : detection_install_dir + '/resources')

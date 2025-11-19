@@ -24,11 +24,28 @@ endif
 
 reference_camera_includes = [include_directories('pipeline_infra')] + [include_directories('perfetto')]
 
+# Get DSP library if available
+dsp_dep = []
+if meson.is_cross_build()
+  sysroot = ''
+  cmd_array = meson.get_compiler('cpp').cmd_array()
+  foreach arg : cmd_array
+    if arg.startswith('--sysroot=')
+      sysroot = arg.split('=')[1]
+      break
+    endif
+  endforeach
+  
+  if sysroot != ''
+    dsp_dep = meson.get_compiler('c').find_library('libhailodsp', required: false, dirs: sysroot + '/usr/lib/')
+  endif
+endif
+
 reference_camera_infra_lib = shared_library('hailo_reference_camera',
   reference_camera_infra_src,
   cpp_args : hailo_lib_args,
   include_directories: reference_camera_includes,
-  dependencies : dependencies_apps + [libhailort_dep, opencv_dep, tracker_dep, tappas_general_dep, image_dep, spdlog_dep, perfetto_dep],
+  dependencies : dependencies_apps + [libhailort_dep, opencv_dep, tracker_dep, tappas_general_dep, image_dep, spdlog_dep, perfetto_dep, dsp_dep],
   gnu_symbol_visibility : 'default',
   version: meson.project_version(),
   install: true,
@@ -37,7 +54,7 @@ reference_camera_infra_lib = shared_library('hailo_reference_camera',
 
 reference_camera_dep = declare_dependency(
   include_directories: reference_camera_includes,
-  dependencies : [libhailort_dep, opencv_dep, tracker_dep, spdlog_dep, perfetto_dep],
+  dependencies : [libhailort_dep, opencv_dep, tracker_dep, spdlog_dep, perfetto_dep, dsp_dep],
   link_with : reference_camera_infra_lib)
 
 pkgc.generate(
