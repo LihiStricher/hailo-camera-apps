@@ -35,7 +35,8 @@
 #define MEDIALIB_CONFIG_PATH "/etc/imaging/cfg/medialib_configs/case_studies/detection_medialib_config.json"
 
 // AI Pipeline Params
-#define AI_VISION_SINK "sink0" // The streamid from frontend to 4K stream that shows vision results
+#define VISION_SINK "sink0" // The streamid from frontend to 4K stream that shows vision results
+#define AI_VISION_SINK "sink1" // The small streamid from frontend that would be used for overlay
 // Tiling Params
 #define TILLING_STAGE "tilling"
 #define TILLING_INPUT_WIDTH 1920
@@ -395,31 +396,44 @@ void create_ai_pipeline(std::shared_ptr<AppResources> app_resources)
     pip_builder.add_stage(dsp_convert_stage);
     pip_builder.add_stage(qwen_vl_stage);
     pip_builder.add_stage(qwen_vl_agg_stage);
+    pip_builder.add_stage(app_resources->encoders[VISION_SINK], StageType::SINK);
     pip_builder.add_stage(app_resources->encoders[AI_VISION_SINK], StageType::SINK);
 
-    // Also add the UDP stage
+    // Also add the UDP stages
+    pip_builder.add_stage(app_resources->udp_outputs[VISION_SINK], StageType::SINK);
     pip_builder.add_stage(app_resources->udp_outputs[AI_VISION_SINK], StageType::SINK);
 
-    // Connect frontend streams to tilling stage
+    // Connect frontend streams to both encoders and AI pipeline
     auto streams = app_resources->frontend->get_outputs_streams();
     if (streams.has_value())
     {
         for (auto s : streams.value())
         {
-            pip_builder.connect_frontend(FRONTEND_STAGE, s.id, TILLING_STAGE);
+            // VISION_SINK: Frontend → Encoder → UDP (raw video)
+            if (s.id == VISION_SINK)
+            {
+                pip_builder.connect_frontend(FRONTEND_STAGE, s.id, app_resources->encoders[VISION_SINK]->get_name());
+            }
+            // AI_VISION_SINK: Frontend → Tilling → DSP → AI → Aggregator → Encoder → UDP
+            else if (s.id == AI_VISION_SINK)
+            {
+                pip_builder.connect_frontend(FRONTEND_STAGE, s.id, TILLING_STAGE);
+            }
         }
     }
 
     // Subscribe stages to each other
-    // Tilling (main) -> Aggregator (already configured in tilling set_main_sub_name)
-    // Tilling (sub) -> DSP Convert -> Qwen VL -> Aggregator
+    // Stream 1 - VISION_SINK: Frontend → Encoder → UDP (raw video)
+    pip_builder.connect(app_resources->encoders[VISION_SINK]->get_name(), app_resources->udp_outputs[VISION_SINK]->get_name());
+    
+    // Stream 2 - AI_VISION_SINK: Frontend → Tilling → DSP → AI → Aggregator → Encoder → UDP
     pip_builder.connect(TILLING_STAGE, QWEN_VL_AGGREGATOR)
         .connect(TILLING_STAGE, DSP_CONVERT_STAGE)
         .connect(DSP_CONVERT_STAGE, QWEN_VL_AI_STAGE)
         .connect(QWEN_VL_AI_STAGE, QWEN_VL_AGGREGATOR)
         .connect(QWEN_VL_AGGREGATOR, app_resources->encoders[AI_VISION_SINK]->get_name());
     
-    // Connect encoder to UDP
+    // Connect AI encoder to UDP
     pip_builder.connect(app_resources->encoders[AI_VISION_SINK]->get_name(), app_resources->udp_outputs[AI_VISION_SINK]->get_name());
 
     // Build and assign pipeline
