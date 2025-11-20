@@ -27,6 +27,7 @@
 #include "reference_camera_logger.hpp"
 #include "pipeline_builder.hpp"
 #include "aggregator_stage.hpp"
+#include "output_metadata_stage.hpp"
 
 // Stage Params
 #define FRONTEND_STAGE "frontend_stage"
@@ -51,6 +52,8 @@ std::vector<HailoBBox> TILES = {{0.0, 0.0, 1.0, 1.0}};
 #define QWEN_VL_HEF_FILE "/home/root/apps/case_studies/detection/resources/qwen2_vl_7b_vision_336x336.hef"
 #define QWEN_VL_AI_STAGE "qwen_vl_inference"
 #define QWEN_VL_AGGREGATOR "qwen_vl_aggregator"
+// Output Metadata Stage Params
+#define OUTPUT_METADATA_STAGE "output_metadata"
 
 // Macro that turns coverts stream ids to port #s
 #define PORT_FROM_ID(id) std::to_string(5000 + std::stoi(id.substr(4)) * 2)
@@ -387,6 +390,10 @@ void create_ai_pipeline(std::shared_ptr<AppResources> app_resources)
                                                              .set_printfps_opt(app_resources->print_fps)
                                                              .buildptr();
 
+    // Output Metadata stage to publish metadata
+    std::shared_ptr<OutputMetadataStage> output_metadata_stage = std::make_shared<OutputMetadataStage>(
+        OUTPUT_METADATA_STAGE, 5, false, app_resources->print_fps);
+
     // Add stages to pipeline using pipeline builder
     PipelineBuilder pip_builder;
 
@@ -396,6 +403,7 @@ void create_ai_pipeline(std::shared_ptr<AppResources> app_resources)
     pip_builder.add_stage(dsp_convert_stage);
     pip_builder.add_stage(qwen_vl_stage);
     pip_builder.add_stage(qwen_vl_agg_stage);
+    pip_builder.add_stage(output_metadata_stage);
     pip_builder.add_stage(app_resources->encoders[VISION_SINK], StageType::SINK);
     pip_builder.add_stage(app_resources->encoders[AI_VISION_SINK], StageType::SINK);
 
@@ -426,11 +434,12 @@ void create_ai_pipeline(std::shared_ptr<AppResources> app_resources)
     // Stream 1 - VISION_SINK: Frontend → Encoder → UDP (raw video)
     pip_builder.connect(app_resources->encoders[VISION_SINK]->get_name(), app_resources->udp_outputs[VISION_SINK]->get_name());
     
-    // Stream 2 - AI_VISION_SINK: Frontend → Tilling → DSP → AI → Aggregator → Encoder → UDP
-    pip_builder.connect(TILLING_STAGE, QWEN_VL_AGGREGATOR)
-        .connect(TILLING_STAGE, DSP_CONVERT_STAGE)
+    // Stream 2 - AI_VISION_SINK: Frontend → Tilling → DSP → AI → Output Metadata → Aggregator → Encoder → UDP
+    pip_builder.connect(TILLING_STAGE, DSP_CONVERT_STAGE)
+        .connect(TILLING_STAGE, QWEN_VL_AGGREGATOR)  // Main inlet: original frames
         .connect(DSP_CONVERT_STAGE, QWEN_VL_AI_STAGE)
-        .connect(QWEN_VL_AI_STAGE, QWEN_VL_AGGREGATOR)
+        .connect(QWEN_VL_AI_STAGE, OUTPUT_METADATA_STAGE)  // Inference → Metadata (publishes tensors)
+        .connect(OUTPUT_METADATA_STAGE, QWEN_VL_AGGREGATOR)  // Metadata → Aggregator (sub inlet)
         .connect(QWEN_VL_AGGREGATOR, app_resources->encoders[AI_VISION_SINK]->get_name());
     
     // Connect AI encoder to UDP

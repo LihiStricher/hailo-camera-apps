@@ -17,10 +17,12 @@ executable('detection_case_study',
 
 qwen2_vl_demo_src = ['qwen2_vl_demo.cpp']
 
+zmq_dep = dependency('libzmq', required: false)
+
 executable('qwen2_vl_demo',
   qwen2_vl_demo_src,
   cpp_args : hailo_lib_args,
-  dependencies : dependencies_apps + [libhailort_dep, reference_camera_dep, tappas_general_dep, image_dep],
+  dependencies : dependencies_apps + [libhailort_dep, reference_camera_dep, tappas_general_dep, image_dep, zmq_dep],
   gnu_symbol_visibility : 'default',
   install: true,
   install_dir: detection_install_dir,
