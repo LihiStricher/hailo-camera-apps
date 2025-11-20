@@ -325,7 +325,6 @@ std::condition_variable g_stop_cv;
 
 int main(int argc, char *argv[])
 {
-    std::cout << "TAK!!!!!!" << std::endl;
     // App resources
     std::shared_ptr<AppResources> app_resources = std::make_shared<AppResources>();
     app_resources->medialib_config_path = MEDIALIB_CONFIG_PATH;
