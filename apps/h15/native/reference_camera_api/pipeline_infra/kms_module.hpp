@@ -40,13 +40,16 @@ class KmsModule : public OutputModule
     std::string m_driver_name;
     bool m_can_scale;
     bool m_force_modesetting;
+    int m_width;
+    int m_height;
 
   public:
     static tl::expected<KmsModulePtr, AppStatus> create(std::string name, std::string driver_name, bool can_scale,
-                                                        bool force_modesetting, EncodingType type, bool print_fps);
+                                                        bool force_modesetting, EncodingType type, bool print_fps,
+                                                        int width = 0, int height = 0);
     ~KmsModule() override = default;
     KmsModule(std::string name, std::string driver_name, bool can_scale, bool force_modesetting, EncodingType type,
-              AppStatus &status, bool print_fps);
+              AppStatus &status, bool print_fps, int width = 0, int height = 0);
 
   private:
     std::string create_pipeline_string();
@@ -54,11 +57,12 @@ class KmsModule : public OutputModule
 
 inline tl::expected<KmsModulePtr, AppStatus> KmsModule::create(std::string name, std::string driver_name,
                                                                bool can_scale, bool force_modesetting,
-                                                               EncodingType type, bool print_fps)
+                                                               EncodingType type, bool print_fps,
+                                                               int width, int height)
 {
     AppStatus status = AppStatus::UNINITIALIZED;
     KmsModulePtr kms_module = std::make_shared<KmsModule>(name, driver_name, can_scale, force_modesetting, type,
-                                                          status, print_fps);
+                                                          status, print_fps, width, height);
     if (status != AppStatus::SUCCESS)
     {
         return tl::make_unexpected(status);
@@ -67,9 +71,9 @@ inline tl::expected<KmsModulePtr, AppStatus> KmsModule::create(std::string name,
 }
 
 inline KmsModule::KmsModule(std::string name, std::string driver_name, bool can_scale, bool force_modesetting,
-                            EncodingType type, AppStatus &status, bool print_fps)
+                            EncodingType type, AppStatus &status, bool print_fps, int width, int height)
     : OutputModule(name, type, print_fps), m_driver_name(driver_name), m_can_scale(can_scale),
-      m_force_modesetting(force_modesetting)
+      m_force_modesetting(force_modesetting), m_width(width), m_height(height)
 {
     // Initialize gstreamer
     gst_init(nullptr, nullptr);
@@ -102,14 +106,17 @@ inline std::string KmsModule::create_pipeline_string()
              << "force-modesetting=" << (m_force_modesetting ? "true" : "false");
 
     // Pipeline for raw video input (BGR format from DSP convert)
-    // appsrc -> queue -> video/x-raw,format=BGR -> queue -> kmssink
+    // appsrc -> queue -> video/x-raw,format=BGR,width,height,framerate -> queue -> kmssink
+    std::ostringstream caps_spec;
+    caps_spec << "video/x-raw,format=BGR,width=" << m_width << ",height=" << m_height << ",framerate=30/1";
+
     pipeline = "appsrc do-timestamp=true format=time block=true is-live=true max-bytes=0 "
                "max-buffers=1 name=" +
                std::string(KMS_SOURCE) +
                " ! "
                "queue name=" +
                std::string(SRC_QUEUE_NAME) + " leaky=no max-size-buffers=5 max-size-bytes=0 max-size-time=0 ! " +
-               "video/x-raw,format=BGR,framerate=30/1 ! "
+               caps_spec.str() + " ! " +
                "queue leaky=no max-size-buffers=1 max-size-bytes=0 max-size-time=0 ! " +
                kms_sink.str();
 

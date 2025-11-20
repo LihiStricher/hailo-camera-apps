@@ -24,19 +24,21 @@ class KmsStage : public ConnectedStage
     bool m_force_modesetting;
     EncodingType m_type;
     KmsModulePtr m_kms;
+    int m_width;
+    int m_height;
 
   public:
     inline KmsStage(std::string name, size_t queue_size = KMS_QUEUE_SIZE_DEFAULT, bool leaky = false, bool print_fps = false)
-        : ConnectedStage(name, queue_size, leaky, print_fps)
+        : ConnectedStage(name, queue_size, leaky, print_fps), m_width(0), m_height(0)
     {
     }
 
-    inline AppStatus create(std::string driver_name, bool can_scale, bool force_modesetting, EncodingType type)
+    inline AppStatus create(std::string driver_name, bool can_scale, bool force_modesetting, EncodingType type, int width = 0, int height = 0)
     {
         if (m_kms == nullptr)
         {
             tl::expected<KmsModulePtr, AppStatus> kms_expected =
-                KmsModule::create(m_stage_name, driver_name, can_scale, force_modesetting, type, m_print_fps);
+                KmsModule::create(m_stage_name, driver_name, can_scale, force_modesetting, type, m_print_fps, width, height);
             if (!kms_expected.has_value())
             {
                 std::cout << "Failed to create kms" << std::endl;
@@ -48,6 +50,8 @@ class KmsStage : public ConnectedStage
             m_can_scale = can_scale;
             m_force_modesetting = force_modesetting;
             m_type = type;
+            m_width = width;
+            m_height = height;
         }
         return AppStatus::SUCCESS;
     }
@@ -70,15 +74,15 @@ class KmsStage : public ConnectedStage
         return AppStatus::SUCCESS;
     }
 
-    inline AppStatus configure(std::string driver_name, bool can_scale, bool force_modesetting, EncodingType type)
+    inline AppStatus configure(std::string driver_name, bool can_scale, bool force_modesetting, EncodingType type, int width = 0, int height = 0)
     {
         if (m_kms == nullptr)
         {
-            return create(driver_name, can_scale, force_modesetting, type);
+            return create(driver_name, can_scale, force_modesetting, type, width, height);
         }
         m_kms->stop();
         m_kms = nullptr;
-        return create(driver_name, can_scale, force_modesetting, type);
+        return create(driver_name, can_scale, force_modesetting, type, width, height);
     }
 
     inline AppStatus process(BufferPtr data)

@@ -203,8 +203,10 @@ void subscribe_to_frontend(std::shared_ptr<AppResources> app_resources)
  * the video on the screen using the specified display driver.
  *
  * @param app_resources Shared pointer to the application's resources.
+ * @param width Width of the frames.
+ * @param height Height of the frames.
  */
-void create_kms_output(std::shared_ptr<AppResources> app_resources)
+void create_kms_output(std::shared_ptr<AppResources> app_resources, int width, int height)
 {
     // Create and configure KMS stage
     std::string kms_name = "kms_output";
@@ -212,7 +214,7 @@ void create_kms_output(std::shared_ptr<AppResources> app_resources)
     std::shared_ptr<KmsStage> kms_stage = std::make_shared<KmsStage>(kms_name);
     app_resources->kms_output = kms_stage;
     
-    AppStatus kms_config_status = kms_stage->configure(KMS_DRIVER_NAME, false, true, EncodingType::H264);
+    AppStatus kms_config_status = kms_stage->configure(KMS_DRIVER_NAME, false, true, EncodingType::H264, width, height);
     if (kms_config_status != AppStatus::SUCCESS)
     {
         std::cerr << "Failed to configure KMS stage " << kms_name << std::endl;
@@ -301,10 +303,10 @@ void configure_frontend_and_output(std::shared_ptr<AppResources> app_resources)
         int width = streams.value()[0].width;
         int height = streams.value()[0].height;
         configure_dsp_convert_stage(app_resources, width, height, HAILO_FORMAT_RGB);
+        
+        // Create KMS output stage with dimensions
+        create_kms_output(app_resources, width, height);
     }
-
-    // Create KMS output stage
-    create_kms_output(app_resources);
 }
 
 /**
@@ -323,6 +325,7 @@ std::condition_variable g_stop_cv;
 
 int main(int argc, char *argv[])
 {
+    std::cout << "TAK!!!!!!" << std::endl;
     // App resources
     std::shared_ptr<AppResources> app_resources = std::make_shared<AppResources>();
     app_resources->medialib_config_path = MEDIALIB_CONFIG_PATH;
