@@ -24,6 +24,7 @@
 #include "udp_stage.hpp"
 #include "encoder_stage.hpp"
 #include "frontend_stage.hpp"
+#include "file_source_stage.hpp"
 #include "reference_camera_logger.hpp"
 #include "pipeline_builder.hpp"
 #include "aggregator_stage.hpp"
@@ -67,6 +68,7 @@ enum class ArgumentType
     Config,
     Profile,
     HostIP,
+    InputFile,
     Error
 };
 
@@ -92,7 +94,9 @@ cxxopts::Options build_arg_parser()
     ("a,profile", "Profile name", 
         cxxopts::value<std::string>()->default_value(NO_PROFILE_SELECTED))
     ("o,host-ip", "Host IP address for UDP output", 
-        cxxopts::value<std::string>()->default_value(HOST_IP));
+        cxxopts::value<std::string>()->default_value(HOST_IP))
+    ("i,input-file", "Input video file path (NV12 format, if not specified uses frontend)",
+        cxxopts::value<std::string>());
     // clang-format on
 
     return options;
@@ -138,6 +142,11 @@ std::vector<ArgumentType> handle_arguments(const cxxopts::ParseResult &result, c
         arguments.push_back(ArgumentType::HostIP);
     }
 
+    if (result.count("input-file"))
+    {
+        arguments.push_back(ArgumentType::InputFile);
+    }
+
     // Handle unrecognized options
     for (const auto &unrecognized : result.unmatched())
     {
@@ -167,6 +176,7 @@ struct AppResources
     std::string medialib_config_path;
     std::string profile_name;
     std::string host_ip = HOST_IP;
+    std::string input_file = "";  /**< Optional input file path for file-based input */
 
     void clear()
     {
@@ -180,6 +190,7 @@ struct AppResources
         media_library = nullptr;
         profile_name = NO_PROFILE_SELECTED;
         host_ip = HOST_IP;
+        input_file = "";
     }
 
     ~AppResources()
@@ -335,6 +346,32 @@ void create_ai_pipeline(std::shared_ptr<AppResources> app_resources)
     std::cout << "Creating AI pipeline..." << std::endl;
     // AI Pipeline Stages
 
+    // Determine if using file input or frontend
+    bool use_file_input = !app_resources->input_file.empty();
+    
+    // Source stage (either FileSourceStage or FrontendStage)
+    ConnectedStagePtr source_stage;
+    
+    if (use_file_input)
+    {
+        std::cout << "Using file input: " << app_resources->input_file << std::endl;
+        auto file_source = FileSourceStageBuild::create()
+                               .set_stage_name("file_source")
+                               .set_file_location(app_resources->input_file)
+                               .set_width(TILLING_INPUT_WIDTH)
+                               .set_height(TILLING_INPUT_HEIGHT)
+                               .set_fps(1)
+                               .set_printfps_opt(app_resources->print_fps)
+                               .set_buffer_pool_size(10)
+                               .buildptr();
+        source_stage = file_source;
+    }
+    else
+    {
+        std::cout << "Using frontend input" << std::endl;
+        source_stage = app_resources->frontend;
+    }
+
     // Tilling stage for resizing to 336x336
     std::shared_ptr<TillingCropStage> tilling_stage = TillingCropStageBuild::create()
                                                           .set_stage_name(TILLING_STAGE)
@@ -355,7 +392,7 @@ void create_ai_pipeline(std::shared_ptr<AppResources> app_resources)
 
     // DSP Convert stage for NV12 to RGB conversion
     std::shared_ptr<DspConvertStage> dsp_convert_stage = std::make_shared<DspConvertStage>(
-        DSP_CONVERT_STAGE, TILLING_OUTPUT_WIDTH, TILLING_OUTPUT_HEIGHT, 5, true, app_resources->print_fps, false);
+        DSP_CONVERT_STAGE, TILLING_OUTPUT_WIDTH, TILLING_OUTPUT_HEIGHT, 5, true, app_resources->print_fps, true);
 
     // Qwen VL inference stage with RGB input
     std::shared_ptr<RGBHailortAsyncStage> qwen_vl_stage = std::make_shared<RGBHailortAsyncStage>(
@@ -397,53 +434,70 @@ void create_ai_pipeline(std::shared_ptr<AppResources> app_resources)
     // Add stages to pipeline using pipeline builder
     PipelineBuilder pip_builder;
 
-    // Add frontend as SOURCE stage
-    pip_builder.add_stage(app_resources->frontend, StageType::SOURCE);
+    // Add source stage (either frontend or file source)
+    if (use_file_input)
+    {
+        pip_builder.add_stage(source_stage, StageType::SOURCE);
+    }
+    else
+    {
+        pip_builder.add_stage(app_resources->frontend, StageType::SOURCE);
+        pip_builder.add_stage(app_resources->encoders[VISION_SINK], StageType::SINK);
+        pip_builder.add_stage(app_resources->encoders[AI_VISION_SINK], StageType::SINK);
+        pip_builder.add_stage(app_resources->udp_outputs[VISION_SINK], StageType::SINK);
+        pip_builder.add_stage(app_resources->udp_outputs[AI_VISION_SINK], StageType::SINK);
+    }
+    
     pip_builder.add_stage(tilling_stage);
     pip_builder.add_stage(dsp_convert_stage);
     pip_builder.add_stage(qwen_vl_stage);
     pip_builder.add_stage(qwen_vl_agg_stage);
     pip_builder.add_stage(output_metadata_stage);
-    pip_builder.add_stage(app_resources->encoders[VISION_SINK], StageType::SINK);
-    pip_builder.add_stage(app_resources->encoders[AI_VISION_SINK], StageType::SINK);
 
-    // Also add the UDP stages
-    pip_builder.add_stage(app_resources->udp_outputs[VISION_SINK], StageType::SINK);
-    pip_builder.add_stage(app_resources->udp_outputs[AI_VISION_SINK], StageType::SINK);
-
-    // Connect frontend streams to both encoders and AI pipeline
-    auto streams = app_resources->frontend->get_outputs_streams();
-    if (streams.has_value())
+    // Connect source to tilling
+    if (use_file_input)
     {
-        for (auto s : streams.value())
+        // For file input, directly connect file source to tilling
+        pip_builder.connect("file_source", TILLING_STAGE);
+    }
+    else
+    {
+        // For frontend input, use connect_frontend
+        auto streams = app_resources->frontend->get_outputs_streams();
+        if (streams.has_value())
         {
-            // VISION_SINK: Frontend → Encoder → UDP (raw video)
-            if (s.id == VISION_SINK)
+            for (auto s : streams.value())
             {
-                pip_builder.connect_frontend(FRONTEND_STAGE, s.id, app_resources->encoders[VISION_SINK]->get_name());
-            }
-            // AI_VISION_SINK: Frontend → Tilling → DSP → AI → Aggregator → Encoder → UDP
-            else if (s.id == AI_VISION_SINK)
-            {
-                pip_builder.connect_frontend(FRONTEND_STAGE, s.id, TILLING_STAGE);
+                // VISION_SINK: Frontend → Encoder → UDP (raw video)
+                if (s.id == VISION_SINK)
+                {
+                    pip_builder.connect_frontend(FRONTEND_STAGE, s.id, app_resources->encoders[VISION_SINK]->get_name());
+                }
+                // AI_VISION_SINK: Frontend → Tilling
+                else if (s.id == AI_VISION_SINK)
+                {
+                    pip_builder.connect_frontend(FRONTEND_STAGE, s.id, TILLING_STAGE);
+                }
             }
         }
+        
+        // Stream 1 - VISION_SINK: Frontend → Encoder → UDP (raw video)
+        pip_builder.connect(app_resources->encoders[VISION_SINK]->get_name(), app_resources->udp_outputs[VISION_SINK]->get_name());
     }
-
-    // Subscribe stages to each other
-    // Stream 1 - VISION_SINK: Frontend → Encoder → UDP (raw video)
-    pip_builder.connect(app_resources->encoders[VISION_SINK]->get_name(), app_resources->udp_outputs[VISION_SINK]->get_name());
     
-    // Stream 2 - AI_VISION_SINK: Frontend → Tilling → DSP → AI → Output Metadata → Aggregator → Encoder → UDP
+    // Stream 2 - AI Pipeline: Tilling → DSP → AI → Output Metadata → Aggregator
     pip_builder.connect(TILLING_STAGE, DSP_CONVERT_STAGE)
         .connect(TILLING_STAGE, QWEN_VL_AGGREGATOR)  // Main inlet: original frames
         .connect(DSP_CONVERT_STAGE, QWEN_VL_AI_STAGE)
         .connect(QWEN_VL_AI_STAGE, OUTPUT_METADATA_STAGE)  // Inference → Metadata (publishes tensors)
-        .connect(OUTPUT_METADATA_STAGE, QWEN_VL_AGGREGATOR)  // Metadata → Aggregator (sub inlet)
-        .connect(QWEN_VL_AGGREGATOR, app_resources->encoders[AI_VISION_SINK]->get_name());
+        .connect(OUTPUT_METADATA_STAGE, QWEN_VL_AGGREGATOR);  // Metadata → Aggregator (sub inlet)
     
-    // Connect AI encoder to UDP
-    pip_builder.connect(app_resources->encoders[AI_VISION_SINK]->get_name(), app_resources->udp_outputs[AI_VISION_SINK]->get_name());
+    if (!use_file_input)
+    {
+        pip_builder.connect(QWEN_VL_AGGREGATOR, app_resources->encoders[AI_VISION_SINK]->get_name());
+        // Connect AI encoder to UDP
+        pip_builder.connect(app_resources->encoders[AI_VISION_SINK]->get_name(), app_resources->udp_outputs[AI_VISION_SINK]->get_name());
+    }
 
     // Build and assign pipeline
     app_resources->pipeline = pip_builder.build();
@@ -506,6 +560,9 @@ int main(int argc, char *argv[])
         case ArgumentType::HostIP:
             app_resources->host_ip = result["host-ip"].as<std::string>();
             break;
+        case ArgumentType::InputFile:
+            app_resources->input_file = result["input-file"].as<std::string>();
+            break;
         case ArgumentType::Error:
             return 1;
         }
@@ -520,7 +577,10 @@ int main(int argc, char *argv[])
     // Start pipeline
     std::cout << "Starting." << std::endl;
     REFERENCE_CAMERA_LOG_INFO("Starting.");
-    app_resources->media_library->start_pipeline();
+    if (app_resources->media_library)
+    {
+        app_resources->media_library->start_pipeline();
+    }
     app_resources->pipeline->start_pipeline();
 
     REFERENCE_CAMERA_LOG_INFO("Started playing for {} seconds.", timeout);
@@ -533,6 +593,9 @@ int main(int argc, char *argv[])
     std::cout << "Stopping." << std::endl;
     REFERENCE_CAMERA_LOG_INFO("Stopping.");
     app_resources->pipeline->stop_pipeline();
-    app_resources->media_library->stop_pipeline();
+    if (app_resources->media_library)
+    {
+        app_resources->media_library->stop_pipeline();
+    }
     return 0;
 }
