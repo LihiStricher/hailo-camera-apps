@@ -37,6 +37,7 @@ public:
     int m_output_height;                     /**< Height of the output data */
     int m_buffer_width = 256;                /**< Width of the output buffer pool */
     int m_buffer_height = 256;               /**< Height of the output buffer pool */
+    bool m_save_frames = false;              /**< Flag to enable/disable frame saving to file */
     std::condition_variable m_available_buffers_cv;
     std::mutex m_buff_pool_mutex;
     StagePoolMode m_pool_mode = StagePoolMode::BLOCKING;
@@ -50,11 +51,13 @@ public:
      * @param queue_size Size of the queue for this stage.
      * @param leaky Indicates if the queue is leaky.
      * @param print_fps Flag to enable or disable printing FPS information.
+     * @param save_frames Flag to enable or disable saving frames to file (default: false).
      */
-    DspConvertStage(std::string name, int buffer_width = 256, int buffer_height = 256, size_t queue_size = 5, bool leaky = true, bool print_fps = false) : ConnectedStage(name, queue_size, leaky, print_fps)
+    DspConvertStage(std::string name, int buffer_width = 256, int buffer_height = 256, size_t queue_size = 5, bool leaky = true, bool print_fps = false, bool save_frames = false) : ConnectedStage(name, queue_size, leaky, print_fps)
     {
         m_buffer_width = buffer_width;
         m_buffer_height = buffer_height;
+        m_save_frames = save_frames;
     }
 
     dsp_status create_device()
@@ -115,6 +118,58 @@ public:
     }
 
     /**
+     * @brief Save a frame to a file.
+     * @param buffer The buffer containing the frame data.
+     * @param width Width of the frame.
+     * @param height Height of the frame.
+     * @param filename Path to the output file.
+     * @return Status of the save operation.
+     */
+    AppStatus save_frame_to_file(const HailoMediaLibraryBufferPtr& buffer, int width, int height, const std::string& filename)
+    {
+        if (!buffer || !buffer->buffer_data)
+        {
+            std::cerr << "Error: Invalid buffer or buffer_data" << std::endl;
+            return AppStatus::BUFFER_ALLOCATION_ERROR;
+        }
+
+        try
+        {
+            std::ofstream file(filename, std::ios::binary);
+            if (!file.is_open())
+            {
+                std::cerr << "Failed to open file: " << filename << std::endl;
+                return AppStatus::BUFFER_ALLOCATION_ERROR;
+            }
+
+            // Calculate the size of RGB buffer (3 bytes per pixel)
+            size_t buffer_size = width * height * 3;
+            
+            // Get pointer to the buffer data using get_plane_ptr
+            uint8_t* data_ptr = (uint8_t *)buffer->get_plane_ptr(0);
+            
+            if (!data_ptr)
+            {
+                std::cerr << "Error: Failed to get plane pointer from buffer" << std::endl;
+                file.close();
+                return AppStatus::BUFFER_ALLOCATION_ERROR;
+            }
+            
+            file.write(reinterpret_cast<const char*>(data_ptr), buffer_size);
+            file.flush();
+            file.close();
+
+            std::cout << "Frame saved successfully to: " << filename << " (size: " << buffer_size << " bytes)" << std::endl;
+            return AppStatus::SUCCESS;
+        }
+        catch (const std::exception& e)
+        {
+            std::cerr << "Exception while saving frame: " << e.what() << std::endl;
+            return AppStatus::BUFFER_ALLOCATION_ERROR;
+        }
+    }
+
+    /**
      * @brief Process the given data buffer and convert from NV12 to RGB.
      * @param data The data buffer to process.
      * @return Status of the processing.
@@ -170,6 +225,23 @@ public:
             delete src;
             delete output;
             return AppStatus::DSP_OPERATION_ERROR;
+        }
+
+        // Save the converted frame to file if enabled (save every 5th frame to reduce I/O)
+        if (m_save_frames)
+        {
+            static int frame_count = 0;
+            if (frame_count % 5 == 0)
+            {
+                std::string output_filename = "/tmp/frame_" + std::to_string(frame_count) + ".raw";
+                std::cout << "Attempting to save frame " << frame_count << " to " << output_filename << std::endl;
+                AppStatus save_status = save_frame_to_file(rgb_image_buffer, m_buffer_width, m_buffer_height, output_filename);
+                if (save_status != AppStatus::SUCCESS)
+                {
+                    std::cerr << "Warning: Failed to save frame to file: " << output_filename << std::endl;
+                }
+            }
+            frame_count++;
         }
 
         send_to_subscribers(rgb_image_buffer_ptr);

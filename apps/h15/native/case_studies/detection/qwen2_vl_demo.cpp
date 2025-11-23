@@ -355,7 +355,7 @@ void create_ai_pipeline(std::shared_ptr<AppResources> app_resources)
 
     // DSP Convert stage for NV12 to RGB conversion
     std::shared_ptr<DspConvertStage> dsp_convert_stage = std::make_shared<DspConvertStage>(
-        DSP_CONVERT_STAGE, TILLING_OUTPUT_WIDTH, TILLING_OUTPUT_HEIGHT, 5, true, app_resources->print_fps);
+        DSP_CONVERT_STAGE, TILLING_OUTPUT_WIDTH, TILLING_OUTPUT_HEIGHT, 5, true, app_resources->print_fps, false);
 
     // Qwen VL inference stage with RGB input
     std::shared_ptr<RGBHailortAsyncStage> qwen_vl_stage = std::make_shared<RGBHailortAsyncStage>(
