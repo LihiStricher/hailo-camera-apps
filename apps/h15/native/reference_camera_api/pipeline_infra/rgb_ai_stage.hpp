@@ -131,6 +131,7 @@ public:
         }
         m_infer_model = infer_model_exp.release();
         m_infer_model->set_batch_size(m_batch_size);
+        m_infer_model->output()->set_format_type(HAILO_FORMAT_TYPE_UINT16);
 
         // Configure the infer model
         auto configured_infer_model_exp = m_infer_model->configure();

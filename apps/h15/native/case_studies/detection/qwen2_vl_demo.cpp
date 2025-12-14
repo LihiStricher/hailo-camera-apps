@@ -27,7 +27,6 @@
 #include "file_source_stage.hpp"
 #include "reference_camera_logger.hpp"
 #include "pipeline_builder.hpp"
-#include "aggregator_stage.hpp"
 #include "output_metadata_stage.hpp"
 
 // Stage Params
@@ -39,20 +38,15 @@
 // AI Pipeline Params
 #define VISION_SINK "sink0" // The streamid from frontend to 4K stream that shows vision results
 #define AI_VISION_SINK "sink1" // The small streamid from frontend that would be used for overlay
-// Tiling Params
-#define TILLING_STAGE "tilling"
-#define TILLING_INPUT_WIDTH 1920
-#define TILLING_INPUT_HEIGHT 1080
-#define TILLING_OUTPUT_WIDTH 336
-#define TILLING_OUTPUT_HEIGHT 336
-// Single tile covering full frame for resize
-std::vector<HailoBBox> TILES = {{0.0, 0.0, 1.0, 1.0}};
+#define VISION_STREAM "sink2" // The streamid for additional vision stream
+// Input dimensions (no tiling/resizing)
+#define INPUT_WIDTH 336
+#define INPUT_HEIGHT 336
 // DSP Convert Stage Params
 #define DSP_CONVERT_STAGE "dsp_convert_nv12_to_rgb"
 // Qwen VL AI Params
 #define QWEN_VL_HEF_FILE "/home/root/apps/case_studies/detection/resources/qwen2_vl_7b_vision_336x336.hef"
 #define QWEN_VL_AI_STAGE "qwen_vl_inference"
-#define QWEN_VL_AGGREGATOR "qwen_vl_aggregator"
 // Output Metadata Stage Params
 #define OUTPUT_METADATA_STAGE "output_metadata"
 
@@ -69,6 +63,10 @@ enum class ArgumentType
     Profile,
     HostIP,
     InputFile,
+    HefFile,
+    InputWidth,
+    InputHeight,
+    InputLayerName,
     Error
 };
 
@@ -96,7 +94,15 @@ cxxopts::Options build_arg_parser()
     ("o,host-ip", "Host IP address for UDP output", 
         cxxopts::value<std::string>()->default_value(HOST_IP))
     ("i,input-file", "Input video file path (NV12 format, if not specified uses frontend)",
-        cxxopts::value<std::string>());
+        cxxopts::value<std::string>())
+    ("hef-file", "HEF model file path", 
+        cxxopts::value<std::string>()->default_value(QWEN_VL_HEF_FILE))
+    ("input-width", "Input width for the model", 
+        cxxopts::value<int>()->default_value("336"))
+    ("input-height", "Input height for the model", 
+        cxxopts::value<int>()->default_value("336"))
+    ("input-layer-name", "Input layer name in HEF model", 
+        cxxopts::value<std::string>()->default_value("qwen2_vl_7b_vision_336x336/input_layer1"));
     // clang-format on
 
     return options;
@@ -147,6 +153,26 @@ std::vector<ArgumentType> handle_arguments(const cxxopts::ParseResult &result, c
         arguments.push_back(ArgumentType::InputFile);
     }
 
+    if (result.count("hef-file"))
+    {
+        arguments.push_back(ArgumentType::HefFile);
+    }
+
+    if (result.count("input-width"))
+    {
+        arguments.push_back(ArgumentType::InputWidth);
+    }
+
+    if (result.count("input-height"))
+    {
+        arguments.push_back(ArgumentType::InputHeight);
+    }
+
+    if (result.count("input-layer-name"))
+    {
+        arguments.push_back(ArgumentType::InputLayerName);
+    }
+
     // Handle unrecognized options
     for (const auto &unrecognized : result.unmatched())
     {
@@ -177,6 +203,10 @@ struct AppResources
     std::string profile_name;
     std::string host_ip = HOST_IP;
     std::string input_file = "";  /**< Optional input file path for file-based input */
+    std::string hef_file = QWEN_VL_HEF_FILE;  /**< HEF model file path */
+    int input_width = INPUT_WIDTH;  /**< Input width for the model */
+    int input_height = INPUT_HEIGHT;  /**< Input height for the model */
+    std::string input_layer_name = "qwen2_vl_7b_vision_336x336/input_layer1";  /**< Input layer name in HEF model */
 
     void clear()
     {
@@ -191,6 +221,10 @@ struct AppResources
         profile_name = NO_PROFILE_SELECTED;
         host_ip = HOST_IP;
         input_file = "";
+        hef_file = QWEN_VL_HEF_FILE;
+        input_width = INPUT_WIDTH;
+        input_height = INPUT_HEIGHT;
+        input_layer_name = "qwen2_vl_7b_vision_336x336/input_layer1";
     }
 
     ~AppResources()
@@ -209,37 +243,6 @@ std::string read_string_from_file(const char *file_path)
     file_to_read.close();
     std::cout << "Read config from file: " << file_path << std::endl;
     return file_string;
-}
-
-/**
- * @brief Subscribe elements within the application pipeline.
- *
- * This function subscribes the output streams from the frontend to appropriate
- * pipeline stages and encoders, ensuring that the data flows correctly through
- * the pipeline. It sets up callbacks for handling the data and integrates encoders
- * with UDP outputs.
- *
- * @param app_resources Shared pointer to the application's resources.
- */
-void subscribe_to_frontend(std::shared_ptr<AppResources> app_resources)
-{
-    // Get frontend output streams
-    auto streams = app_resources->frontend->get_outputs_streams();
-    if (!streams.has_value())
-    {
-        std::cout << "Failed to get stream ids" << std::endl;
-        throw std::runtime_error("Failed to get stream ids");
-    }
-
-    // Subscribe to frontend
-    for (auto s : streams.value())
-    {
-        std::cout << "subscribing to frontend for '" << s.id << "'" << std::endl;
-        // Subscribe tilling stage to frontend
-        app_resources->frontend->subscribe_to_stream(
-            s.id,
-            std::static_pointer_cast<ConnectedStage>(app_resources->pipeline->get_stage_by_name(TILLING_STAGE)));
-    }
 }
 
 /**
@@ -358,8 +361,8 @@ void create_ai_pipeline(std::shared_ptr<AppResources> app_resources)
         auto file_source = FileSourceStageBuild::create()
                                .set_stage_name("file_source")
                                .set_file_location(app_resources->input_file)
-                               .set_width(TILLING_INPUT_WIDTH)
-                               .set_height(TILLING_INPUT_HEIGHT)
+                               .set_width(app_resources->input_width)
+                               .set_height(app_resources->input_height)
                                .set_fps(1)
                                .set_printfps_opt(app_resources->print_fps)
                                .set_buffer_pool_size(10)
@@ -372,33 +375,19 @@ void create_ai_pipeline(std::shared_ptr<AppResources> app_resources)
         source_stage = app_resources->frontend;
     }
 
-    // Tilling stage for resizing to 336x336
-    std::shared_ptr<TillingCropStage> tilling_stage = TillingCropStageBuild::create()
-                                                          .set_stage_name(TILLING_STAGE)
-                                                          .set_output_pool_size(50)
-                                                          .set_input_width(TILLING_INPUT_WIDTH)
-                                                          .set_input_height(TILLING_INPUT_HEIGHT)
-                                                          .set_output_width(TILLING_OUTPUT_WIDTH)
-                                                          .set_output_height(TILLING_OUTPUT_HEIGHT)
-                                                          .set_main_sub_name(QWEN_VL_AGGREGATOR)
-                                                          .set_sub_sub_name(DSP_CONVERT_STAGE)
-                                                          .set_bbox_tiles(TILES)
-                                                          .set_queue_size(5)
-                                                          .set_leaky_opt(true)
-                                                          .set_printfps_opt(app_resources->print_fps)
-                                                          .set_pool_mode_opt(StagePoolMode::BLOCKING)
-                                                          .set_crop_every_x_frames(1)
-                                                          .buildptr();
-
     // DSP Convert stage for NV12 to RGB conversion
-    std::shared_ptr<DspConvertStage> dsp_convert_stage = std::make_shared<DspConvertStage>(
-        DSP_CONVERT_STAGE, TILLING_OUTPUT_WIDTH, TILLING_OUTPUT_HEIGHT, 5, true, app_resources->print_fps, true);
+    auto dsp_convert_stage = std::make_shared<DspConvertStage>(
+        DSP_CONVERT_STAGE, app_resources->input_width, app_resources->input_height, 5, true, app_resources->print_fps, false);
+    dsp_convert_stage->m_input_width = app_resources->input_width;
+    dsp_convert_stage->m_input_height = app_resources->input_height;
+    dsp_convert_stage->m_output_width = app_resources->input_width;
+    dsp_convert_stage->m_output_height = app_resources->input_height;
 
     // Qwen VL inference stage with RGB input
     std::shared_ptr<RGBHailortAsyncStage> qwen_vl_stage = std::make_shared<RGBHailortAsyncStage>(
         QWEN_VL_AI_STAGE,
-        QWEN_VL_HEF_FILE,
-        "qwen2_vl_7b_vision_336x336/input_layer1",
+        app_resources->hef_file,
+        app_resources->input_layer_name,
         5,
         50,
         "device0",
@@ -409,23 +398,6 @@ void create_ai_pipeline(std::shared_ptr<AppResources> app_resources)
         std::chrono::milliseconds(100),
         app_resources->print_fps,
         StagePoolMode::BLOCKING);
-
-    // Aggregator stage to merge tilling and qwen_vl results
-    std::shared_ptr<AggregatorStage> qwen_vl_agg_stage = AggregatorStageBuild::create()
-                                                             .set_stage_name(QWEN_VL_AGGREGATOR)
-                                                             .set_blocking(false)
-                                                             .set_main_inlet_name(TILLING_STAGE)
-                                                             .set_main_queue_size(4)
-                                                             .set_main_leaky(true)
-                                                             .set_sub_inlet_name(QWEN_VL_AI_STAGE)
-                                                             .set_sub_queue_size(5)
-                                                             .set_sub_leaky(true)
-                                                             .set_multiscale_opt(false)
-                                                             .set_sync_opt(false)
-                                                             .set_iou_threshold_opt(0.3)
-                                                             .set_border_threshold_opt(0.1)
-                                                             .set_printfps_opt(app_resources->print_fps)
-                                                             .buildptr();
 
     // Output Metadata stage to publish metadata
     std::shared_ptr<OutputMetadataStage> output_metadata_stage = std::make_shared<OutputMetadataStage>(
@@ -444,21 +416,21 @@ void create_ai_pipeline(std::shared_ptr<AppResources> app_resources)
         pip_builder.add_stage(app_resources->frontend, StageType::SOURCE);
         pip_builder.add_stage(app_resources->encoders[VISION_SINK], StageType::SINK);
         pip_builder.add_stage(app_resources->encoders[AI_VISION_SINK], StageType::SINK);
+        pip_builder.add_stage(app_resources->encoders[VISION_STREAM], StageType::SINK);
         pip_builder.add_stage(app_resources->udp_outputs[VISION_SINK], StageType::SINK);
         pip_builder.add_stage(app_resources->udp_outputs[AI_VISION_SINK], StageType::SINK);
+        pip_builder.add_stage(app_resources->udp_outputs[VISION_STREAM], StageType::SINK);
     }
     
-    pip_builder.add_stage(tilling_stage);
     pip_builder.add_stage(dsp_convert_stage);
     pip_builder.add_stage(qwen_vl_stage);
-    pip_builder.add_stage(qwen_vl_agg_stage);
     pip_builder.add_stage(output_metadata_stage);
 
-    // Connect source to tilling
+    // Connect source to DSP convert (no tilling)
     if (use_file_input)
     {
-        // For file input, directly connect file source to tilling
-        pip_builder.connect("file_source", TILLING_STAGE);
+        // For file input, directly connect file source to DSP convert
+        pip_builder.connect("file_source", DSP_CONVERT_STAGE);
     }
     else
     {
@@ -473,28 +445,33 @@ void create_ai_pipeline(std::shared_ptr<AppResources> app_resources)
                 {
                     pip_builder.connect_frontend(FRONTEND_STAGE, s.id, app_resources->encoders[VISION_SINK]->get_name());
                 }
-                // AI_VISION_SINK: Frontend → Tilling
+                // AI_VISION_SINK: Frontend → DSP Convert (no tilling)
                 else if (s.id == AI_VISION_SINK)
                 {
-                    pip_builder.connect_frontend(FRONTEND_STAGE, s.id, TILLING_STAGE);
+                    pip_builder.connect_frontend(FRONTEND_STAGE, s.id, DSP_CONVERT_STAGE);
+                }
+                // VISION_STREAM: Frontend → Encoder → UDP (additional vision stream)
+                else if (s.id == VISION_STREAM)
+                {
+                    pip_builder.connect_frontend(FRONTEND_STAGE, s.id, app_resources->encoders[VISION_STREAM]->get_name());
                 }
             }
         }
         
         // Stream 1 - VISION_SINK: Frontend → Encoder → UDP (raw video)
         pip_builder.connect(app_resources->encoders[VISION_SINK]->get_name(), app_resources->udp_outputs[VISION_SINK]->get_name());
+        
+        // Stream 3 - VISION_STREAM: Frontend → Encoder → UDP (additional vision stream)
+        pip_builder.connect(app_resources->encoders[VISION_STREAM]->get_name(), app_resources->udp_outputs[VISION_STREAM]->get_name());
     }
     
-    // Stream 2 - AI Pipeline: Tilling → DSP → AI → Output Metadata → Aggregator
-    pip_builder.connect(TILLING_STAGE, DSP_CONVERT_STAGE)
-        .connect(TILLING_STAGE, QWEN_VL_AGGREGATOR)  // Main inlet: original frames
-        .connect(DSP_CONVERT_STAGE, QWEN_VL_AI_STAGE)
-        .connect(QWEN_VL_AI_STAGE, OUTPUT_METADATA_STAGE)  // Inference → Metadata (publishes tensors)
-        .connect(OUTPUT_METADATA_STAGE, QWEN_VL_AGGREGATOR);  // Metadata → Aggregator (sub inlet)
+    // Stream 2 - AI Pipeline: DSP → AI → Output Metadata → Encoder
+    pip_builder.connect(DSP_CONVERT_STAGE, QWEN_VL_AI_STAGE)
+        .connect(QWEN_VL_AI_STAGE, OUTPUT_METADATA_STAGE);  // Inference → Metadata (publishes tensors)
     
     if (!use_file_input)
     {
-        pip_builder.connect(QWEN_VL_AGGREGATOR, app_resources->encoders[AI_VISION_SINK]->get_name());
+        pip_builder.connect(OUTPUT_METADATA_STAGE, app_resources->encoders[AI_VISION_SINK]->get_name());
         // Connect AI encoder to UDP
         pip_builder.connect(app_resources->encoders[AI_VISION_SINK]->get_name(), app_resources->udp_outputs[AI_VISION_SINK]->get_name());
     }
@@ -563,6 +540,18 @@ int main(int argc, char *argv[])
         case ArgumentType::InputFile:
             app_resources->input_file = result["input-file"].as<std::string>();
             break;
+        case ArgumentType::HefFile:
+            app_resources->hef_file = result["hef-file"].as<std::string>();
+            break;
+        case ArgumentType::InputWidth:
+            app_resources->input_width = result["input-width"].as<int>();
+            break;
+        case ArgumentType::InputHeight:
+            app_resources->input_height = result["input-height"].as<int>();
+            break;
+        case ArgumentType::InputLayerName:
+            app_resources->input_layer_name = result["input-layer-name"].as<std::string>();
+            break;
         case ArgumentType::Error:
             return 1;
         }
@@ -572,6 +561,7 @@ int main(int argc, char *argv[])
     configure_frontend_and_encoders(app_resources);
 
     // Create pipeline and stages (this will set app_resources->pipeline via PipelineBuilder)
+    // Note: PipelineBuilder handles all frontend connections, so no separate subscribe_to_frontend() call needed
     create_ai_pipeline(app_resources);
 
     // Start pipeline

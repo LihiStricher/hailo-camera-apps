@@ -59,11 +59,6 @@ public:
         
         // Extract and send output tensors
         auto tensors = roi->get_tensors();
-        std::cout << "OutputMetadataStage: Sending " << tensors.size() << " tensors via ZMQ." << std::endl;
-        
-        // Debug: print ROI info
-        std::cout << "OutputMetadataStage: ROI object = " << roi.get() << std::endl;
-        
         if (tensors.empty())
         {
             std::cout << "WARNING: No tensors found in ROI!" << std::endl;
@@ -71,17 +66,17 @@ public:
         
         for (const auto &tensor : tensors)
         {
-            // Get tensor data
-            uint8_t *tensor_data = tensor->data();
-            size_t tensor_size = tensor->size();
+            // Get tensor data as uint16 (since network outputs HAILO_FORMAT_TYPE_UINT16)
+            uint16_t *tensor_data = reinterpret_cast<uint16_t *>(tensor->data());
+            // Calculate correct byte size: size() returns element count, multiply by 2 for uint16
+            size_t tensor_size_bytes = tensor->is_uint16() ? (tensor->size() * sizeof(uint16_t)) : tensor->size();
             
             // Send tensor name first
             std::string tensor_name = tensor->name();
-            std::cout << "Sending tensor: " << tensor_name << " (size: " << tensor_size << ")" << std::endl;
             zmq_publisher.send(zmq::buffer(tensor_name), zmq::send_flags::sndmore);
             
             // Send tensor data via ZeroMQ
-            zmq_publisher.send(zmq::buffer(tensor_data, tensor_size), zmq::send_flags::none);
+            zmq_publisher.send(zmq::buffer(tensor_data, tensor_size_bytes), zmq::send_flags::none);
         }
 
         data->add_time_stamp(m_stage_name);

@@ -110,6 +110,10 @@ public:
     {
         return m_data;
     }
+    uint16_t *data_uint16()
+    {
+        return reinterpret_cast<uint16_t *>(m_data);
+    }
     const uint32_t width() { return m_width; }
     const uint32_t height() { return m_height; }
     const uint32_t features() { return m_features; }    
@@ -118,6 +122,11 @@ public:
     const uint32_t size() const
     {
         return m_width * m_height * m_features; // Total number of elements in the tensor.
+    }
+    const uint32_t size_in_bytes() const
+    {
+        uint32_t element_count = m_width * m_height * m_features;
+        return m_is_uint16 ? (element_count * sizeof(uint16_t)) : element_count;
     }
     std::vector<std::size_t> shape()
     {
