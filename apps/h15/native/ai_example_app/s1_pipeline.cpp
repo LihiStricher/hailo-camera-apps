@@ -56,23 +56,22 @@
 // Tilling Params
 #define MUXER_STAGE "muxer"
 
-#define TILLING_STAGE "tilling"
-#define TILLING_INPUT_WIDTH 1920
-#define TILLING_INPUT_HEIGHT 1080
-#define TILLING_OUTPUT_WIDTH 640
-#define TILLING_OUTPUT_HEIGHT 384
-std::vector<HailoBBox> TILES = {
-    {0.0, 0.0, 0.6, 0.6}, {0.4, 0, 0.6, 0.6}, {0, 0.4, 0.6, 0.6}, {0.4, 0.4, 0.6, 0.6}, {0.0, 0.0, 1.0, 1.0}};
+// #define TILLING_STAGE "tilling"
+// #define TILLING_INPUT_WIDTH 1920
+// #define TILLING_INPUT_HEIGHT 1080
+// #define TILLING_OUTPUT_WIDTH 1920
+// #define TILLING_OUTPUT_HEIGHT 1080
+// std::vector<HailoBBox> TILES = {{0.0, 0.0, 1.0, 1.0}};
 // Example: indices to draw for landmarks (used if not full_landmarks)
 const std::unordered_set<size_t> LANDMARKS_INDICES_EXAMPLE = {33, 468, 133, 362, 473, 263, 5, 4, 1};
 // Detection AI Params
-#define YOLO_HEF_FILE "/home/root/apps/ai_example_app/resources/yolov8n_personface_nv12.hef"
+#define YOLO_HEF_FILE "/home/root/apps/s1_demo/resources/yolov5m_wo_spp_60p_nv12_fhd.hef"
 #define DETECTION_AI_STAGE "yolo_detection"
 // Detection Postprocess Params
 #define POST_STAGE "yolo_post"
-#define YOLO_POST_SO "/usr/lib/hailo-post-processes/libyolo_hailortpp_post.so"
-#define YOLO_FUNC_NAME "yolov8n_personface"
-#define YOLO_POST_CONF "/home/root/apps/detection/resources/configs/yolov5_personface.json"
+#define YOLO_POST_SO "/usr/lib/hailo-post-processes/libyolo_post.so"
+#define YOLO_FUNC_NAME "yolov5"
+#define YOLO_POST_CONF "/home/root/apps/detection/resources/configs/yolov5.json"
 // Stage 1 Aggregator Params
 #define DETECTION_AGGREGATOR "detection_aggregator"
 #define STAGE_1_AGGREGATOR "stage_1_aggregator"
@@ -442,23 +441,6 @@ void create_main_pipeline(std::shared_ptr<AppResources> app_resources)
             }
         });
 
-        std::shared_ptr<TillingCropStage> tilling_stage = TillingCropStageBuild::create()
-                                                              .set_stage_name(TILLING_STAGE)
-                                                              .set_output_pool_size(50)
-                                                              .set_input_width(TILLING_INPUT_WIDTH)
-                                                              .set_input_height(TILLING_INPUT_HEIGHT)
-                                                              .set_output_width(TILLING_OUTPUT_WIDTH)
-                                                              .set_output_height(TILLING_OUTPUT_HEIGHT)
-                                                              .set_main_sub_name(DETECTION_AGGREGATOR)
-                                                              .set_sub_sub_name(DETECTION_AI_STAGE)
-                                                              .set_bbox_tiles(TILES)
-                                                              .set_queue_size(5)
-                                                              .set_leaky_opt(true)
-                                                              .set_printfps_opt(app_resources->print_fps)
-                                                              .set_pool_mode_opt(StagePoolMode::BLOCKING)
-                                                              .set_crop_every_x_frames(1)
-                                                              .buildptr();
-
         std::shared_ptr<HailortAsyncStage> detection_stage =
             HailortAsyncStageBuild::create()
                 .set_stage_name(DETECTION_AI_STAGE)
@@ -485,22 +467,6 @@ void create_main_pipeline(std::shared_ptr<AppResources> app_resources)
                                                                      .set_printfps_opt(app_resources->print_fps)
                                                                      .buildptr();
 
-        std::shared_ptr<AggregatorStage> detection_agg_stage = AggregatorStageBuild::create()
-                                                                   .set_stage_name(DETECTION_AGGREGATOR)
-                                                                   .set_blocking(true)
-                                                                   .set_main_inlet_name(TILLING_STAGE)
-                                                                   .set_main_queue_size(4)
-                                                                   .set_main_leaky(false)
-                                                                   .set_sub_inlet_name(POST_STAGE)
-                                                                   .set_sub_queue_size(5)
-                                                                   .set_sub_leaky(false)
-                                                                   .set_multiscale_opt(true)
-                                                                   .set_sync_opt(false)
-                                                                   .set_iou_threshold_opt(0.3)
-                                                                   .set_border_threshold_opt(0.1)
-                                                                   .set_printfps_opt(app_resources->print_fps)
-                                                                   .buildptr();
-
         std::shared_ptr<AggregatorStage> stage_1_agg_stage =
             AggregatorStageBuild::create()
                 .set_stage_name(STAGE_1_AGGREGATOR)
@@ -508,11 +474,11 @@ void create_main_pipeline(std::shared_ptr<AppResources> app_resources)
                 .set_main_inlet_name(CALLBACK_STAGE)
                 .set_main_queue_size(4)
                 .set_main_leaky(true)
-                .set_sub_inlet_name(DETECTION_AGGREGATOR)
+                .set_sub_inlet_name(POST_STAGE)
                 .set_sub_queue_size(3)
                 .set_sub_leaky(false)
                 .set_multiscale_opt(false)
-                .set_sync_opt(true)
+                .set_sync_opt(false)
                 .set_iou_threshold_opt(0.3)
                 .set_border_threshold_opt(0.1)
                 .set_printfps_opt(app_resources->print_fps)
@@ -669,10 +635,8 @@ void create_main_pipeline(std::shared_ptr<AppResources> app_resources)
             .add_stage(stage_1_agg_stage)
             .add_stage(muxer_stage)
             .add_stage(callback_stage)
-            .add_stage(tilling_stage)
             .add_stage(detection_stage)
             .add_stage(detection_post_stage)
-            .add_stage(detection_agg_stage)
             .add_stage(tee_stage)
             .add_stage(stage_2_agg_stage)
             .add_stage(bbox_crop_stage)
@@ -706,7 +670,7 @@ void create_main_pipeline(std::shared_ptr<AppResources> app_resources)
             {
                 REFERENCE_CAMERA_LOG_INFO("subscribing ai pipeline to frontend for {}", s.id);
                 // Subscribe tiling to frontend
-                pip_builder.connect_frontend(FRONTEND_STAGE, s.id, TILLING_STAGE);
+                pip_builder.connect_frontend(FRONTEND_STAGE, s.id, DETECTION_AI_STAGE);
             }
             else if (s.id == VISION_SINK || s.id == SECONDARY_VISION_SINK)
             {
@@ -725,11 +689,8 @@ void create_main_pipeline(std::shared_ptr<AppResources> app_resources)
         // Stage 1 AI Subscriptions
         pip_builder.connect(MUXER_STAGE, CALLBACK_STAGE)
             .connect(CALLBACK_STAGE, STAGE_1_AGGREGATOR)
-            .connect(TILLING_STAGE, DETECTION_AGGREGATOR)
-            .connect(TILLING_STAGE, DETECTION_AI_STAGE)
             .connect(DETECTION_AI_STAGE, POST_STAGE)
-            .connect(POST_STAGE, DETECTION_AGGREGATOR)
-            .connect(DETECTION_AGGREGATOR, STAGE_1_AGGREGATOR);
+            .connect(POST_STAGE, STAGE_1_AGGREGATOR);
 
         // Stage 2 AI Subscriptions
         pip_builder.connect(STAGE_1_AGGREGATOR, TEE_STAGE)

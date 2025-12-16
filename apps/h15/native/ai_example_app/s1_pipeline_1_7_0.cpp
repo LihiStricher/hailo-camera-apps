@@ -58,7 +58,7 @@
 #define DETECTION_AI_STAGE "yolo_detection"
 // Detection Postprocess Params
 #define POST_STAGE "yolo_post"
-#define YOLO_POST_SO "/usr/lib/hailo-post-processes/libyolo_hailortpp_post.so"
+#define YOLO_POST_SO "/usr/lib/hailo-post-processes/libyolo_post.so"
 #define YOLO_FUNC_NAME "yolov5"
 
 // #define CLIP_HEF_FILE "/home/root/apps/s1_demo/resources/clip_convnext_visual_256_quantized.hef"
@@ -541,10 +541,8 @@ void create_ai_pipeline(std::shared_ptr<AppResources> app_resources)
                                                                                    .set_main_inlet_name(TEE_STAGE)
                                                                                    .set_main_queue_size(5)
                                                                                    .set_main_leaky(false)
-                                                                                   .set_sub_inlet_name(CROPPED_FACES_AGGREGATOR)
-                                                                                   .set_sub_queue_size(3)
-                                                                                   .set_sub_leaky(false)
                                                                                    .set_multiscale_opt(false)
+                                                                                   .set_sub_inlet_name(AFTER_RESIZE_AGGREGATOR_STAGE)
                                                                                    .set_sync_opt(true)
                                                                                    .set_iou_threshold_opt(0.3)
                                                                                    .set_border_threshold_opt(0.1)
