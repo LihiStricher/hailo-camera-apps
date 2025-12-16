@@ -56,12 +56,6 @@
 // Tilling Params
 #define MUXER_STAGE "muxer"
 
-// #define TILLING_STAGE "tilling"
-// #define TILLING_INPUT_WIDTH 1920
-// #define TILLING_INPUT_HEIGHT 1080
-// #define TILLING_OUTPUT_WIDTH 1920
-// #define TILLING_OUTPUT_HEIGHT 1080
-// std::vector<HailoBBox> TILES = {{0.0, 0.0, 1.0, 1.0}};
 // Example: indices to draw for landmarks (used if not full_landmarks)
 const std::unordered_set<size_t> LANDMARKS_INDICES_EXAMPLE = {33, 468, 133, 362, 473, 263, 5, 4, 1};
 // Detection AI Params
@@ -77,15 +71,33 @@ const std::unordered_set<size_t> LANDMARKS_INDICES_EXAMPLE = {33, 468, 133, 362,
 #define STAGE_1_AGGREGATOR "stage_1_aggregator"
 
 /*
+    Stage 1.5 Params (Face Detection)
+*/
+// person Bbox crop Parms
+#define PERSON_BBOX_CROP_STAGE "person_bbox_crops"
+#define PERSON_BBOX_CROP_LABEL "person"
+#define PERSON_BBOX_CROP_OUTPUT_WIDTH 320
+#define PERSON_BBOX_CROP_OUTPUT_HEIGHT 240
+// Face detection AI Params
+#define FACE_DETECTION_HEF_FILE "/home/root/apps/s1_demo/resources/lightface_slim_nv12.hef"
+#define FACE_DETECTION_AI_STAGE "face_detection"
+// Face Detection Postprocess Params
+#define FACE_DETECTION_POST_STAGE "face_detection_post"
+#define FACE_DETECTION_POST_SO "/usr/lib/hailo-post-processes/libface_detection_post.so"
+#define FACE_DETECTION_FUNC_NAME "lightface"
+// Stage 1.5 Aggregator Params
+#define FACE_DETECTION_AGGREGATOR "face_detection_aggregator"
+
+/*
     Stage 2 Params (Face Landmarks)
 */
 // Tee Params
 #define TEE_STAGE "vision_tee"
-// Bbox crop Parms
-#define BBOX_CROP_STAGE "bbox_crops"
-#define BBOX_CROP_LABEL "face"
-#define BBOX_CROP_OUTPUT_WIDTH 192
-#define BBOX_CROP_OUTPUT_HEIGHT 192
+// Face Bbox crop Parms
+#define FACE_BBOX_CROP_STAGE "face_bbox_crops"
+#define FACE_BBOX_CROP_LABEL "face"
+#define FACE_BBOX_CROP_OUTPUT_WIDTH 192
+#define FACE_BBOX_CROP_OUTPUT_HEIGHT 192
 // Landmarks AI Params
 #define LANDMARKS_HEF_FILE "/home/root/apps/ai_example_app/resources/face_landmarks_lite_nv12.hef"
 #define LANDMARKS_AI_STAGE "face_landmarks"
@@ -491,6 +503,70 @@ void create_main_pipeline(std::shared_ptr<AppResources> app_resources)
                  __________________________________________
                 /                                          \
             +--------+    +-----------+    +------+    +------------+
+            |  crop  | -> | lightface | -> | post | -> | aggregator |
+            +--------+    +-----------+    +------+    +------------+
+        */
+        std::shared_ptr<BBoxCropStage> person_bbox_crop_stage = BBoxCropStageBuild::create()
+                                                            .set_stage_name(PERSON_BBOX_CROP_STAGE)
+                                                            .set_output_pool_size(150)
+                                                            .set_input_width(bbox_crop_input_width)
+                                                            .set_input_height(bbox_crop_input_height)
+                                                            .set_output_width(PERSON_BBOX_CROP_OUTPUT_WIDTH)
+                                                            .set_output_height(PERSON_BBOX_CROP_OUTPUT_HEIGHT)
+                                                            .set_main_sub_name(FACE_DETECTION_AGGREGATOR)
+                                                            .set_sub_sub_name(FACE_DETECTION_AI_STAGE)
+                                                            .set_label(PERSON_BBOX_CROP_LABEL)
+                                                            .set_queue_size(5)
+                                                            .set_leaky_opt(true)
+                                                            .set_printfps_opt(app_resources->print_fps)
+                                                            .set_pool_mode_opt(StagePoolMode::BLOCKING)
+                                                            .buildptr();
+
+        std::shared_ptr<HailortAsyncStage> face_detection_stage =
+            HailortAsyncStageBuild::create()
+                .set_stage_name(FACE_DETECTION_AI_STAGE)
+                .set_hef_path(FACE_DETECTION_HEF_FILE)
+                .set_queue_size(100)
+                .set_output_pool_size(50)
+                .set_group_id("device0")
+                .set_batch_size(60)
+                .set_job_limit(60)
+                .set_scheduler_threshold_opt(60)
+                .set_dynamic_threshold_opt(true)
+                .set_scheduler_timeout_opt(std::chrono::milliseconds(100))
+                .set_printfps_opt(app_resources->print_fps)
+                .set_pool_mode_opt(StagePoolMode::BLOCKING)
+                .buildptr();
+
+        std::shared_ptr<PostprocessStage> face_detection_post_stage = PostprocessStageBuild::create()
+                                                                     .set_stage_name(FACE_DETECTION_POST_STAGE)
+                                                                     .set_so_path(FACE_DETECTION_POST_SO)
+                                                                     .set_function_name_opt(FACE_DETECTION_FUNC_NAME)
+                                                                     .set_config_path_opt("")
+                                                                     .set_queue_size_opt(100)
+                                                                     .set_leaky_opt(false)
+                                                                     .set_printfps_opt(app_resources->print_fps)
+                                                                     .buildptr();
+
+        std::shared_ptr<AggregatorStage> face_detection_agg_stage = AggregatorStageBuild::create()
+                                                                   .set_stage_name(FACE_DETECTION_AGGREGATOR)
+                                                                   .set_blocking(true)
+                                                                   .set_main_inlet_name(PERSON_BBOX_CROP_STAGE)
+                                                                   .set_main_queue_size(3)
+                                                                   .set_main_leaky(false)
+                                                                   .set_sub_inlet_name(FACE_DETECTION_POST_STAGE)
+                                                                   .set_sub_queue_size(100)
+                                                                   .set_sub_leaky(false)
+                                                                   .set_multiscale_opt(false)
+                                                                   .set_sync_opt(false)
+                                                                   .set_iou_threshold_opt(0.3)
+                                                                   .set_border_threshold_opt(0.1)
+                                                                   .set_printfps_opt(app_resources->print_fps)
+                                                                   .buildptr();
+        /*
+                 __________________________________________
+                /                                          \
+            +--------+    +-----------+    +------+    +------------+
             |  crop  | -> | mobilenet | -> | post | -> | aggregator |
             +--------+    +-----------+    +------+    +------------+
         */
@@ -502,16 +578,16 @@ void create_main_pipeline(std::shared_ptr<AppResources> app_resources)
                                                   .set_printfps_opt(app_resources->print_fps)
                                                   .buildptr();
 
-        std::shared_ptr<BBoxCropStage> bbox_crop_stage = BBoxCropStageBuild::create()
-                                                             .set_stage_name(BBOX_CROP_STAGE)
+        std::shared_ptr<BBoxCropStage> face_bbox_crop_stage = BBoxCropStageBuild::create()
+                                                             .set_stage_name(FACE_BBOX_CROP_STAGE)
                                                              .set_output_pool_size(150)
                                                              .set_input_width(bbox_crop_input_width)
                                                              .set_input_height(bbox_crop_input_height)
-                                                             .set_output_width(BBOX_CROP_OUTPUT_WIDTH)
-                                                             .set_output_height(BBOX_CROP_OUTPUT_HEIGHT)
+                                                             .set_output_width(FACE_BBOX_CROP_OUTPUT_WIDTH)
+                                                             .set_output_height(FACE_BBOX_CROP_OUTPUT_HEIGHT)
                                                              .set_main_sub_name(LANDMARKS_AGGREGATOR)
                                                              .set_sub_sub_name(LANDMARKS_AI_STAGE)
-                                                             .set_label(BBOX_CROP_LABEL)
+                                                             .set_label(FACE_BBOX_CROP_LABEL)
                                                              .set_queue_size(5)
                                                              .set_leaky_opt(true)
                                                              .set_printfps_opt(app_resources->print_fps)
@@ -547,7 +623,7 @@ void create_main_pipeline(std::shared_ptr<AppResources> app_resources)
         std::shared_ptr<AggregatorStage> landmarks_agg_stage = AggregatorStageBuild::create()
                                                                    .set_stage_name(LANDMARKS_AGGREGATOR)
                                                                    .set_blocking(true)
-                                                                   .set_main_inlet_name(BBOX_CROP_STAGE)
+                                                                   .set_main_inlet_name(FACE_BBOX_CROP_STAGE)
                                                                    .set_main_queue_size(3)
                                                                    .set_main_leaky(false)
                                                                    .set_sub_inlet_name(LANDMARKS_POST_STAGE)
@@ -639,7 +715,11 @@ void create_main_pipeline(std::shared_ptr<AppResources> app_resources)
             .add_stage(detection_post_stage)
             .add_stage(tee_stage)
             .add_stage(stage_2_agg_stage)
-            .add_stage(bbox_crop_stage)
+            .add_stage(person_bbox_crop_stage)
+            .add_stage(face_detection_stage)
+            .add_stage(face_detection_post_stage)
+            .add_stage(face_detection_agg_stage)
+            .add_stage(face_bbox_crop_stage)
             .add_stage(landmarks_stage)
             .add_stage(landmarks_post_stage)
             .add_stage(landmarks_agg_stage)
@@ -692,15 +772,23 @@ void create_main_pipeline(std::shared_ptr<AppResources> app_resources)
             .connect(DETECTION_AI_STAGE, POST_STAGE)
             .connect(POST_STAGE, STAGE_1_AGGREGATOR);
 
+        // Stage 1.5 Face Detection AI Subscriptions
+        pip_builder.connect(STAGE_1_AGGREGATOR, PERSON_BBOX_CROP_STAGE)
+            .connect(PERSON_BBOX_CROP_STAGE, FACE_DETECTION_AGGREGATOR)
+            .connect(PERSON_BBOX_CROP_STAGE, FACE_DETECTION_AI_STAGE)
+            .connect(FACE_DETECTION_AI_STAGE, FACE_DETECTION_POST_STAGE)
+            .connect(FACE_DETECTION_POST_STAGE, FACE_DETECTION_AGGREGATOR)
+            .connect(FACE_DETECTION_AGGREGATOR, TEE_STAGE);
         // Stage 2 AI Subscriptions
-        pip_builder.connect(STAGE_1_AGGREGATOR, TEE_STAGE)
-            .connect(TEE_STAGE, STAGE_2_AGGREGATOR)
-            .connect(TEE_STAGE, BBOX_CROP_STAGE)
-            .connect(BBOX_CROP_STAGE, LANDMARKS_AGGREGATOR)
-            .connect(BBOX_CROP_STAGE, LANDMARKS_AI_STAGE)
+        pip_builder.connect(TEE_STAGE, FACE_BBOX_CROP_STAGE)
+            .connect(FACE_BBOX_CROP_STAGE, LANDMARKS_AGGREGATOR)
+            .connect(FACE_BBOX_CROP_STAGE, LANDMARKS_AI_STAGE)
             .connect(LANDMARKS_AI_STAGE, LANDMARKS_POST_STAGE)
-            .connect(LANDMARKS_POST_STAGE, LANDMARKS_AGGREGATOR)
-            .connect(LANDMARKS_AGGREGATOR, STAGE_2_AGGREGATOR);
+            .connect(LANDMARKS_POST_STAGE, LANDMARKS_AGGREGATOR);
+        
+        // Stage 2 Aggregator and Vision Pipeline
+        pip_builder.connect(LANDMARKS_AGGREGATOR, STAGE_2_AGGREGATOR)
+            .connect(TEE_STAGE, STAGE_2_AGGREGATOR);
 
         // Vision Pipeline stages
         pip_builder.connect(STAGE_2_AGGREGATOR, TRACKER_STAGE)
