@@ -22,6 +22,8 @@
 #include "pipeline.hpp"
 #include "ai_stage.hpp"
 #include "dsp_stages.hpp"
+#include "dsp_convert_stage.hpp"
+#include "fire_detection_ai_stage.hpp"
 #include "postprocess_stage.hpp"
 #include "overlay_stage.hpp"
 #include "udp_stage.hpp"
@@ -42,6 +44,7 @@
 #define VISION_SINK "sink0" // The streamid from frontend to 4K stream that shows vision results
 #define SECONDARY_VISION_SINK "sink1" // The small streamid from frontend that would be used for overlay
 #define AI_SINK "sink2" // The streamid from frontend to AI (FHD)
+#define CLIP_SINK "sink3" // The streamid from frontend for fire detection (CLIP)
 #define CALLBACK_STAGE "callback_stage"
 
 // Output Params
@@ -111,6 +114,31 @@ const std::unordered_set<size_t> LANDMARKS_INDICES_EXAMPLE = {33, 468, 133, 362,
 // Stage 2 Aggregator Params
 #define LANDMARKS_AGGREGATOR "landmarks_aggregator"
 #define STAGE_2_AGGREGATOR "stage_2_aggregator"
+
+/*
+    Stage 3 Params (Fire Detection - CLIP)
+*/
+// Fire Detection Tilling Params
+#define FIRE_DET_TILLING_STAGE "fire_detection_tilling_stage"
+#define FIRE_DET_TILLING_INPUT_WIDTH 1920
+#define FIRE_DET_TILLING_INPUT_HEIGHT 1080
+#define FIRE_DET_TILLING_OUTPUT_WIDTH 256
+#define FIRE_DET_TILLING_OUTPUT_HEIGHT 256
+#define FIRE_DET_TILLING_AGGREGATOR_STAGE "fire_detection_tilling_aggregator"
+// Fire Detection Convert Params
+#define CONVERT_STAGE "convert"
+// Fire Detection AI Params
+#define CLIP_HEF_FILE "/home/root/apps/s1_demo/resources/clip_convnext_visual_256_quantized.hef"
+#define CLIP_AI_STAGE "clip_ai"
+
+std::vector<HailoBBox> FIRE_DET_TILES = {
+    {0.0, 0.0, 0.333, 0.5},   // top-left
+    {0.333, 0.0, 0.333, 0.5}, // top-middle
+    {0.666, 0.0, 0.333, 0.5}, // top-right
+    {0.0, 0.5, 0.333, 0.5},   // bottom-left
+    {0.333, 0.5, 0.333, 0.5}, // bottom-middle
+    {0.666, 0.5, 0.333, 0.5}  // bottom-right
+};
 
 // Macro that turns coverts stream ids to port #s
 #define PORT_FROM_ID(id) std::to_string(5000 + std::stoi(id.substr(4)) * 2)
@@ -362,9 +390,10 @@ void configure_frontend_and_encoders(std::shared_ptr<AppResources> app_resources
     // Create encoders and output files for each stream
     for (auto s : streams.value())
     {
-        if (s.id == AI_SINK)
+        if (s.id == AI_SINK || s.id == CLIP_SINK)
         {
             // AI pipeline does not get an encoder since it is merged into 4K
+            // CLIP_SINK does not get an encoder since it is internal fire detection pipeline
             continue;
         }
         create_encoder_and_udp(s.id, app_resources);
@@ -527,7 +556,7 @@ void create_main_pipeline(std::shared_ptr<AppResources> app_resources)
                 .set_stage_name(FACE_DETECTION_AI_STAGE)
                 .set_hef_path(FACE_DETECTION_HEF_FILE)
                 .set_queue_size(100)
-                .set_output_pool_size(50)
+                .set_output_pool_size(40)
                 .set_group_id("device0")
                 .set_batch_size(60)
                 .set_job_limit(60)
@@ -661,6 +690,63 @@ void create_main_pipeline(std::shared_ptr<AppResources> app_resources)
                 .buildptr();
 
         /*
+            Stage 3 Fire Detection (CLIP) Pipeline
+            ___________________________________________
+                /                                      \
+            +--------+    +------+    +-----+    +------+    +--------+    +-------+
+            | tiling | -> | cvrt | -> |clip | -> | post | -> | cvrt2 | -> |agg    |
+            +--------+    +------+    +-----+    +------+    +--------+    +-------+
+        */
+        std::shared_ptr<TillingCropStage> fire_detection_tilling_stage = TillingCropStageBuild::create()
+                                                                              .set_stage_name(FIRE_DET_TILLING_STAGE)
+                                                                              .set_output_pool_size(20)
+                                                                              .set_input_width(FIRE_DET_TILLING_INPUT_WIDTH)
+                                                                              .set_input_height(FIRE_DET_TILLING_INPUT_HEIGHT)
+                                                                              .set_output_width(FIRE_DET_TILLING_OUTPUT_WIDTH)
+                                                                              .set_output_height(FIRE_DET_TILLING_OUTPUT_HEIGHT)
+                                                                              .set_main_sub_name(FIRE_DET_TILLING_AGGREGATOR_STAGE)
+                                                                              .set_sub_sub_name(CONVERT_STAGE)
+                                                                              .set_bbox_tiles(FIRE_DET_TILES)
+                                                                              .set_queue_size(5)
+                                                                              .set_leaky_opt(true)
+                                                                              .set_printfps_opt(app_resources->print_fps)
+                                                                              .set_pool_mode_opt(StagePoolMode::BLOCKING)
+                                                                              .set_crop_every_x_frames(1)
+                                                                              .buildptr();
+
+        std::shared_ptr<DspConvertStage> convert_stage = std::make_shared<DspConvertStage>(CONVERT_STAGE, 30);
+
+        std::shared_ptr<FireDetectionHailortAsyncStage> clip_stage = std::make_shared<FireDetectionHailortAsyncStage>(
+                                                            CLIP_AI_STAGE,
+                                                            CLIP_HEF_FILE,
+                                                            6,
+                                                            20,
+                                                            "device0",
+                                                            6,
+                                                            10,
+                                                            6,
+                                                            false,
+                                                            std::chrono::milliseconds(100),
+                                                            app_resources->print_fps,
+                                                            StagePoolMode::BLOCKING);
+
+        std::shared_ptr<AggregatorStage> fire_detection_tilling_agg_stage = AggregatorStageBuild::create()
+                                                                                   .set_stage_name(FIRE_DET_TILLING_AGGREGATOR_STAGE)
+                                                                                   .set_blocking(true)
+                                                                                   .set_main_inlet_name(FIRE_DET_TILLING_STAGE)
+                                                                                   .set_main_queue_size(6)
+                                                                                   .set_main_leaky(true)
+                                                                                   .set_sub_inlet_name(CLIP_AI_STAGE)
+                                                                                   .set_sub_queue_size(20)
+                                                                                   .set_sub_leaky(false)
+                                                                                   .set_multiscale_opt(false)
+                                                                                   .set_sync_opt(false)
+                                                                                   .set_iou_threshold_opt(0.3)
+                                                                                   .set_border_threshold_opt(0.1)
+                                                                                   .set_printfps_opt(app_resources->print_fps)
+                                                                                   .buildptr();
+
+        /*
             +---------+    +---------+    +---------+
             | tracker | -> | demuxer | -> | overlay |
             +---------+    +---------+    +---------+
@@ -723,15 +809,20 @@ void create_main_pipeline(std::shared_ptr<AppResources> app_resources)
             .add_stage(landmarks_stage)
             .add_stage(landmarks_post_stage)
             .add_stage(landmarks_agg_stage)
+            .add_stage(fire_detection_tilling_stage)
+            .add_stage(convert_stage)
+            .add_stage(clip_stage)
+            .add_stage(fire_detection_tilling_agg_stage)
             .add_stage(tracker_stage)
             .add_stage(demux_stage)
             .add_stage(overlay_stage);
 
-        // Add encoder and udp to stage (except AI_SINK)
+        // Add encoder and udp to stage (except AI_SINK and CLIP_SINK)
         for (auto s : streams.value())
         {
             // AI_SINK does not get an encoder since it is merged into 4K
-            if (s.id != AI_SINK)
+            // CLIP_SINK does not get an encoder since it is internal fire detection pipeline
+            if (s.id != AI_SINK && s.id != CLIP_SINK)
             {
                 // Add encoder/udp to pipeline stage
                 pip_builder.add_stage(app_resources->encoders[s.id], StageType::SINK)
@@ -757,6 +848,12 @@ void create_main_pipeline(std::shared_ptr<AppResources> app_resources)
                 REFERENCE_CAMERA_LOG_INFO("subscribing to frontend for {}", s.id);
                 // Subscribe tiling aggregator to frontend
                 pip_builder.connect_frontend(FRONTEND_STAGE, s.id, MUXER_STAGE);
+            }
+            else if (s.id == CLIP_SINK)
+            {
+                REFERENCE_CAMERA_LOG_INFO("subscribing fire detection pipeline to frontend for {}", s.id);
+                // Subscribe fire detection tilling to frontend
+                pip_builder.connect_frontend(FRONTEND_STAGE, s.id, FIRE_DET_TILLING_STAGE);
             }
             else
             {
@@ -790,6 +887,13 @@ void create_main_pipeline(std::shared_ptr<AppResources> app_resources)
         pip_builder.connect(LANDMARKS_AGGREGATOR, STAGE_2_AGGREGATOR)
             .connect(TEE_STAGE, STAGE_2_AGGREGATOR);
 
+        
+        // Stage 3 Fire Detection (CLIP) AI Subscriptions
+        pip_builder.connect(FIRE_DET_TILLING_STAGE, CONVERT_STAGE)
+            .connect(CONVERT_STAGE, CLIP_AI_STAGE)
+            .connect(CLIP_AI_STAGE, FIRE_DET_TILLING_AGGREGATOR_STAGE)
+            .connect(FIRE_DET_TILLING_STAGE, FIRE_DET_TILLING_AGGREGATOR_STAGE);
+
         // Vision Pipeline stages
         pip_builder.connect(STAGE_2_AGGREGATOR, TRACKER_STAGE)
             .connect(TRACKER_STAGE, DEMUX_STAGE)
@@ -801,7 +905,8 @@ void create_main_pipeline(std::shared_ptr<AppResources> app_resources)
         for (auto s : streams.value())
         {
             // AI_SINK does not get an encoder since it is merged into 4K
-            if (s.id != AI_SINK)
+            // CLIP_SINK does not get an encoder since it is internal fire detection pipeline
+            if (s.id != AI_SINK && s.id != CLIP_SINK)
             {
                 pip_builder.connect(app_resources->encoders[s.id]->get_name(),
                                     app_resources->udp_outputs[s.id]->get_name());

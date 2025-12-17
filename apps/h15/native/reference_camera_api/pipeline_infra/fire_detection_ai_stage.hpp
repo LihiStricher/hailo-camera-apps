@@ -517,7 +517,8 @@ public:
         m_active_jobs_cv.wait(lock, [this]
                               { return m_active_jobs < m_jobs_limit; });
 
-        m_bindings.input("clip_convnext_visual_256/input_layer1")->set_buffer(hailort::MemoryView(data->get_buffer()->get_plane_ptr(0), data->get_buffer()->get_plane_size(0) + data->get_buffer()->get_plane_size(1)));
+        size_t input_buffer_size = data->get_buffer()->get_plane_size(0) + data->get_buffer()->get_plane_size(1);
+        m_bindings.input("clip_convnext_visual_256/input_layer1")->set_buffer(hailort::MemoryView(data->get_buffer()->get_plane_ptr(0), input_buffer_size));
 
         // Acquire and set tensor buffers
         std::unordered_map<std::string, BufferPtr> tensor_buffers;
