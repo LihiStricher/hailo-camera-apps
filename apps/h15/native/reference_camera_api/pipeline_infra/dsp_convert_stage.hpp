@@ -126,7 +126,6 @@ public:
         }
 
         HailoMediaLibraryBufferPtr rgb_image_buffer = std::make_shared<hailo_media_library_buffer>();
-        BufferPtr rgb_image_buffer_ptr = std::make_shared<Buffer>(rgb_image_buffer);
         if (m_buffer_pool->get_available_buffers_count() > 0)
         {
             if (m_buffer_pool->acquire_buffer(rgb_image_buffer) != MEDIA_LIBRARY_SUCCESS)
@@ -139,6 +138,14 @@ public:
         {
             rgb_image_buffer.reset();
             return AppStatus::SUCCESS;
+        }
+        
+        BufferPtr rgb_image_buffer_ptr = std::make_shared<Buffer>(rgb_image_buffer);
+        
+        // Copy batch metadata from input buffer to output buffer
+        auto batch_metadata = data->get_metadata_of_type(MetadataType::BATCH);
+        for (const auto& metadata : batch_metadata) {
+            rgb_image_buffer_ptr->add_metadata(metadata);
         }
         auto status = dsp_utils::hailo_buffer_data_to_dsp_image_props(rgb_image_buffer->buffer_data.get(), output);
         if (status != DSP_SUCCESS)
@@ -166,3 +173,55 @@ public:
         return AppStatus::SUCCESS;
     }
 };
+
+class DspConvertStageBuild : public DspConvertStage
+{
+  public:
+    class Builder
+    {
+      private:
+        std::optional<std::string> m_stage_name;
+        size_t m_queue_size = 5;
+        bool m_leaky = true;
+        bool m_print_fps = false;
+
+      public:
+        Builder &set_stage_name(std::string name)
+        {
+            m_stage_name = name;
+            return *this;
+        }
+
+        Builder &set_queue_size(size_t size)
+        {
+            m_queue_size = size;
+            return *this;
+        }
+
+        Builder &set_leaky_opt(bool leaky)
+        {
+            m_leaky = leaky;
+            return *this;
+        }
+
+        Builder &set_printfps_opt(bool print_fps)
+        {
+            m_print_fps = print_fps;
+            return *this;
+        }
+
+        std::shared_ptr<DspConvertStage> buildptr() const
+        {
+            if (!m_stage_name.has_value())
+                throw std::runtime_error("set_stage_name is required");
+
+            return std::make_shared<DspConvertStage>(m_stage_name.value(), m_queue_size, m_leaky, m_print_fps);
+        }
+    };
+
+    static Builder create()
+    {
+        return Builder();
+    }
+};
+

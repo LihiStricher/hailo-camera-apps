@@ -366,6 +366,18 @@ public:
             if (m_end_of_stream)
                 return AppStatus::SUCCESS;
 
+            // Get batch metadata to know which tile this is
+            int tile_number = -1;
+            std::vector<MetadataPtr> batch_metadata = input_buffer->get_metadata_of_type(MetadataType::BATCH);
+            if (batch_metadata.size() > 0)
+            {
+                BatchMetadataPtr batch_meta = std::dynamic_pointer_cast<BatchMetadata>(batch_metadata[0]);
+                if (batch_meta)
+                {
+                    tile_number = batch_meta->get_index();
+                }
+            }
+
             // Add metadata for each output tensor buffer
             for (auto &output : m_infer_model->outputs()) {
                 m_debug_counters->increment_extra_counter(static_cast<int>(AIExtraCounters::TENSORS));
@@ -373,11 +385,10 @@ public:
                 void* data_ptr = tensor_buffer->get_buffer()->get_plane_ptr(0);
                 size_t embedding_size = tensor_buffer->get_buffer()->get_plane_size(0) / sizeof(float);
                 auto [best_index, confidence] = calc_probs(data_ptr, embedding_size, text_embeddings);
-                //send the best index and confidence to the ZMQ publisher
-                std::string message = best_index + "," + std::to_string(confidence);
-                zmq_publisher.send(zmq::buffer(message), zmq::send_flags::none);
-
-                if (best_index == "0") {
+                //send the best index, confidence, and tile number to the ZMQ publisher
+                
+                std::string message = "tile:" + std::to_string(tile_number) + ",class:" + best_index + ",confidence:" + std::to_string(confidence);
+                zmq_publisher.send(zmq::buffer(message), zmq::send_flags::none);                if (best_index == "0") {
                     float bbox_xmin = 0.1;
                     float bbox_ymin = 0.1;
                     float bbox_xmax = 0.9;
@@ -491,6 +502,7 @@ public:
             init_done = true;
         }
         m_debug_counters->increment_input_frames();
+        
         // Wait and set scheduler threshold if dynamic thresholding used
         if (m_dynamic_threshold)
         {
@@ -534,5 +546,125 @@ public:
         }
         
         return AppStatus::SUCCESS;
+    }
+};
+
+class FireDetectionHailortAsyncStageBuild : public FireDetectionHailortAsyncStage
+{
+  public:
+    class Builder
+    {
+      private:
+        std::optional<std::string> m_stage_name;
+        std::optional<std::string> m_hef_path;
+        size_t m_queue_size = 10;
+        int m_output_pool_size = -1;
+        std::optional<std::string> m_group_id;
+        int m_batch_size = 1;
+        size_t m_job_limit = 1;
+        int m_scheduler_threshold = 4;
+        bool m_dynamic_threshold = false;
+        std::chrono::milliseconds m_scheduler_timeout = std::chrono::milliseconds(100);
+        bool m_print_fps = false;
+        StagePoolMode m_pool_mode = StagePoolMode::FAIL_ON_EMPTY_POOL;
+
+      public:
+        Builder &set_stage_name(std::string name)
+        {
+            m_stage_name = name;
+            return *this;
+        }
+
+        Builder &set_hef_path(std::string path)
+        {
+            m_hef_path = path;
+            return *this;
+        }
+
+        Builder &set_queue_size(size_t size)
+        {
+            m_queue_size = size;
+            return *this;
+        }
+
+        Builder &set_output_pool_size(int size)
+        {
+            m_output_pool_size = size;
+            return *this;
+        }
+
+        Builder &set_group_id(std::string id)
+        {
+            m_group_id = id;
+            return *this;
+        }
+
+        Builder &set_batch_size(int size)
+        {
+            m_batch_size = size;
+            return *this;
+        }
+
+        Builder &set_job_limit(size_t size)
+        {
+            m_job_limit = size;
+            return *this;
+        }
+
+        Builder &set_scheduler_threshold_opt(int threshold)
+        {
+            m_scheduler_threshold = threshold;
+            return *this;
+        }
+
+        Builder &set_dynamic_threshold_opt(bool activate)
+        {
+            m_dynamic_threshold = activate;
+            return *this;
+        }
+
+        Builder &set_scheduler_timeout_opt(std::chrono::milliseconds timeout)
+        {
+            m_scheduler_timeout = timeout;
+            return *this;
+        }
+
+        Builder &set_printfps_opt(bool activate)
+        {
+            m_print_fps = activate;
+            return *this;
+        }
+
+        Builder &set_pool_mode_opt(StagePoolMode mode)
+        {
+            m_pool_mode = mode;
+            return *this;
+        }
+
+        std::shared_ptr<FireDetectionHailortAsyncStage> buildptr() const
+        {
+            if (!m_stage_name.has_value())
+                throw std::runtime_error("set_stage_name is required");
+            if (!m_hef_path.has_value())
+                throw std::runtime_error("set_hef_path is required");
+            if (m_output_pool_size <= 0)
+                throw std::runtime_error("set_output_pool_size is required and must be > 0");
+            if (!m_group_id.has_value())
+                throw std::runtime_error("set_group_id is required");
+            if (m_batch_size < 1)
+                throw std::runtime_error("set_batch_size must be >= 1");
+            if (m_job_limit == 0)
+                throw std::runtime_error("set_job_limit is required and must be > 0");
+
+            return std::make_shared<FireDetectionHailortAsyncStage>(
+                m_stage_name.value(), m_hef_path.value(), m_queue_size, m_output_pool_size, m_group_id.value(),
+                m_batch_size, m_job_limit, m_scheduler_threshold, m_dynamic_threshold, m_scheduler_timeout,
+                m_print_fps, m_pool_mode);
+        }
+    };
+
+    static Builder create()
+    {
+        return Builder();
     }
 };

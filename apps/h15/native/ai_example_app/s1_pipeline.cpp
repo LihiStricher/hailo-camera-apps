@@ -36,6 +36,7 @@
 #include "pipeline_builder.hpp"
 #include "muxer_stage.hpp"
 #include "demuxer_stage.hpp"
+#include "output_metadata_stage.hpp"
 
 // Frontend Params
 #define FRONTEND_STAGE "frontend_stage"
@@ -50,6 +51,7 @@
 // Output Params
 #define HOST_IP "10.0.0.2"
 #define TRACKER_STAGE "tracker"
+#define OUTPUT_METADATA_STAGE "output_metadata"
 #define OVERLAY_STAGE "overlay"
 #define DEMUX_STAGE "demuxer"
 
@@ -124,7 +126,6 @@ const std::unordered_set<size_t> LANDMARKS_INDICES_EXAMPLE = {33, 468, 133, 362,
 #define FIRE_DET_TILLING_INPUT_HEIGHT 1080
 #define FIRE_DET_TILLING_OUTPUT_WIDTH 256
 #define FIRE_DET_TILLING_OUTPUT_HEIGHT 256
-#define FIRE_DET_TILLING_AGGREGATOR_STAGE "fire_detection_tilling_aggregator"
 // Fire Detection Convert Params
 #define CONVERT_STAGE "convert"
 // Fire Detection AI Params
@@ -562,7 +563,7 @@ void create_main_pipeline(std::shared_ptr<AppResources> app_resources)
                 .set_job_limit(60)
                 .set_scheduler_threshold_opt(60)
                 .set_dynamic_threshold_opt(true)
-                .set_scheduler_timeout_opt(std::chrono::milliseconds(100))
+                .set_scheduler_timeout_opt(std::chrono::milliseconds(300))
                 .set_printfps_opt(app_resources->print_fps)
                 .set_pool_mode_opt(StagePoolMode::BLOCKING)
                 .buildptr();
@@ -581,7 +582,7 @@ void create_main_pipeline(std::shared_ptr<AppResources> app_resources)
                                                                    .set_stage_name(FACE_DETECTION_AGGREGATOR)
                                                                    .set_blocking(true)
                                                                    .set_main_inlet_name(PERSON_BBOX_CROP_STAGE)
-                                                                   .set_main_queue_size(3)
+                                                                   .set_main_queue_size(20)
                                                                    .set_main_leaky(false)
                                                                    .set_sub_inlet_name(FACE_DETECTION_POST_STAGE)
                                                                    .set_sub_queue_size(100)
@@ -628,7 +629,7 @@ void create_main_pipeline(std::shared_ptr<AppResources> app_resources)
                 .set_stage_name(LANDMARKS_AI_STAGE)
                 .set_hef_path(LANDMARKS_HEF_FILE)
                 .set_queue_size(100)
-                .set_output_pool_size(201)
+                .set_output_pool_size(50)
                 .set_group_id("device0")
                 .set_batch_size(60)
                 .set_job_limit(60)
@@ -704,7 +705,7 @@ void create_main_pipeline(std::shared_ptr<AppResources> app_resources)
                                                                               .set_input_height(FIRE_DET_TILLING_INPUT_HEIGHT)
                                                                               .set_output_width(FIRE_DET_TILLING_OUTPUT_WIDTH)
                                                                               .set_output_height(FIRE_DET_TILLING_OUTPUT_HEIGHT)
-                                                                              .set_main_sub_name(FIRE_DET_TILLING_AGGREGATOR_STAGE)
+                                                                              .set_main_sub_name(CLIP_AI_STAGE)
                                                                               .set_sub_sub_name(CONVERT_STAGE)
                                                                               .set_bbox_tiles(FIRE_DET_TILES)
                                                                               .set_queue_size(5)
@@ -714,37 +715,25 @@ void create_main_pipeline(std::shared_ptr<AppResources> app_resources)
                                                                               .set_crop_every_x_frames(1)
                                                                               .buildptr();
 
-        std::shared_ptr<DspConvertStage> convert_stage = std::make_shared<DspConvertStage>(CONVERT_STAGE, 30);
+        std::shared_ptr<DspConvertStage> convert_stage = DspConvertStageBuild::create()
+                                                            .set_stage_name(CONVERT_STAGE)
+                                                            .set_queue_size(30)
+                                                            .buildptr();
 
-        std::shared_ptr<FireDetectionHailortAsyncStage> clip_stage = std::make_shared<FireDetectionHailortAsyncStage>(
-                                                            CLIP_AI_STAGE,
-                                                            CLIP_HEF_FILE,
-                                                            6,
-                                                            20,
-                                                            "device0",
-                                                            6,
-                                                            10,
-                                                            6,
-                                                            false,
-                                                            std::chrono::milliseconds(100),
-                                                            app_resources->print_fps,
-                                                            StagePoolMode::BLOCKING);
-
-        std::shared_ptr<AggregatorStage> fire_detection_tilling_agg_stage = AggregatorStageBuild::create()
-                                                                                   .set_stage_name(FIRE_DET_TILLING_AGGREGATOR_STAGE)
-                                                                                   .set_blocking(true)
-                                                                                   .set_main_inlet_name(FIRE_DET_TILLING_STAGE)
-                                                                                   .set_main_queue_size(6)
-                                                                                   .set_main_leaky(true)
-                                                                                   .set_sub_inlet_name(CLIP_AI_STAGE)
-                                                                                   .set_sub_queue_size(20)
-                                                                                   .set_sub_leaky(false)
-                                                                                   .set_multiscale_opt(false)
-                                                                                   .set_sync_opt(false)
-                                                                                   .set_iou_threshold_opt(0.3)
-                                                                                   .set_border_threshold_opt(0.1)
-                                                                                   .set_printfps_opt(app_resources->print_fps)
-                                                                                   .buildptr();
+        std::shared_ptr<FireDetectionHailortAsyncStage> clip_stage = FireDetectionHailortAsyncStageBuild::create()
+                                                            .set_stage_name(CLIP_AI_STAGE)
+                                                            .set_hef_path(CLIP_HEF_FILE)
+                                                            .set_queue_size(6)
+                                                            .set_output_pool_size(20)
+                                                            .set_group_id("device0")
+                                                            .set_batch_size(6)
+                                                            .set_job_limit(10)
+                                                            .set_scheduler_threshold_opt(6)
+                                                            .set_dynamic_threshold_opt(false)
+                                                            .set_scheduler_timeout_opt(std::chrono::milliseconds(100))
+                                                            .set_printfps_opt(app_resources->print_fps)
+                                                            .set_pool_mode_opt(StagePoolMode::BLOCKING)
+                                                            .buildptr();
 
         /*
             +---------+    +---------+    +---------+
@@ -757,11 +746,12 @@ void create_main_pipeline(std::shared_ptr<AppResources> app_resources)
                                                                      .set_queue_size_opt(1)
                                                                      .set_leaky_opt(false)
                                                                      .set_printfps_opt(false)
-                                                                     .set_classification_ids({1, 2})
+                                                                     .set_classification_ids({-1, 0, 1, 2})
                                                                      .set_add_tracking_id(false)
                                                                      .set_grace_period(4)
                                                                      .set_smooth_alpha(0.5f)
                                                                      .set_weighted_average_decay(0.4f)
+                                                                     .set_copy_nested_objects(true, -1)
                                                                      .set_copy_nested_objects(false, 1)
                                                                      .set_copy_nested_objects(true, 2)
                                                                      .buildptr();
@@ -776,6 +766,12 @@ void create_main_pipeline(std::shared_ptr<AppResources> app_resources)
                 .set_leaky_opt(false)
                 .set_printfps_opt(app_resources->print_fps)
                 .buildptr();
+
+        std::shared_ptr<OutputMetadataStage> output_metadata_stage = std::make_shared<OutputMetadataStage>(
+                                                          OUTPUT_METADATA_STAGE,
+                                                          1,
+                                                          false,
+                                                          app_resources->print_fps);
 
         std::shared_ptr<OverlayStage> overlay_stage = OverlayStageBuild::create()
                                                           .set_stage_name(OVERLAY_STAGE)
@@ -812,9 +808,9 @@ void create_main_pipeline(std::shared_ptr<AppResources> app_resources)
             .add_stage(fire_detection_tilling_stage)
             .add_stage(convert_stage)
             .add_stage(clip_stage)
-            .add_stage(fire_detection_tilling_agg_stage)
             .add_stage(tracker_stage)
             .add_stage(demux_stage)
+            .add_stage(output_metadata_stage)
             .add_stage(overlay_stage);
 
         // Add encoder and udp to stage (except AI_SINK and CLIP_SINK)
@@ -890,13 +886,12 @@ void create_main_pipeline(std::shared_ptr<AppResources> app_resources)
         
         // Stage 3 Fire Detection (CLIP) AI Subscriptions
         pip_builder.connect(FIRE_DET_TILLING_STAGE, CONVERT_STAGE)
-            .connect(CONVERT_STAGE, CLIP_AI_STAGE)
-            .connect(CLIP_AI_STAGE, FIRE_DET_TILLING_AGGREGATOR_STAGE)
-            .connect(FIRE_DET_TILLING_STAGE, FIRE_DET_TILLING_AGGREGATOR_STAGE);
+            .connect(CONVERT_STAGE, CLIP_AI_STAGE);
 
         // Vision Pipeline stages
         pip_builder.connect(STAGE_2_AGGREGATOR, TRACKER_STAGE)
-            .connect(TRACKER_STAGE, DEMUX_STAGE)
+            .connect(TRACKER_STAGE, OUTPUT_METADATA_STAGE)
+            .connect(OUTPUT_METADATA_STAGE, DEMUX_STAGE)
             .connect(DEMUX_STAGE, app_resources->encoders[VISION_SINK]->get_name())
             .connect(DEMUX_STAGE, OVERLAY_STAGE)
             .connect(OVERLAY_STAGE, app_resources->encoders[SECONDARY_VISION_SINK]->get_name());
