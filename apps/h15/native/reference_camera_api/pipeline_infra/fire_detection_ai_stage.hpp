@@ -353,8 +353,12 @@ public:
         std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
         auto job = m_configured_infer_model.run_async(m_bindings, [tensor_buffers, input_buffer, begin, this](const hailort::AsyncInferCompletionInfo& completion_info) {
             // active job finished
-            --this->m_active_jobs;
-            m_active_jobs_cv.notify_one();
+            {
+                std::unique_lock<std::mutex> lock(m_active_jobs_mutex);
+                --this->m_active_jobs;
+                m_active_jobs_cv.notify_one();
+            }
+            inference_tracing_end(input_buffer);
             
             // check infer status
             if (completion_info.status != HAILO_SUCCESS) {
@@ -485,6 +489,58 @@ public:
         }
     }
 
+    std::string generate_unique_timestamp_str(BufferPtr data)
+    {
+        uint64_t isp_timestamp_ns = data->get_buffer()->isp_timestamp_ns;
+        size_t batch_index = 0;
+
+        std::vector<MetadataPtr> metadata = data->get_metadata_of_type(MetadataType::BATCH);
+        if (metadata.size() > 0)
+        {
+            BatchMetadataPtr batch_metadata = std::dynamic_pointer_cast<BatchMetadata>(metadata[0]);
+            if (batch_metadata != nullptr)
+            {
+                batch_index = batch_metadata->get_index();
+            }
+        }
+
+        // Use batch index as the unique identifier if isp_timestamp is 0
+        uint64_t unique_value = (isp_timestamp_ns != 0) ? isp_timestamp_ns : batch_index;
+        return m_stage_name + "{" + std::to_string(unique_value) + "}";
+    }
+
+    uint64_t get_unique_buffer_identifier(BufferPtr data)
+    {
+        uint64_t isp_timestamp_ns = data->get_buffer()->isp_timestamp_ns;
+        size_t batch_index = 0;
+
+        std::vector<MetadataPtr> metadata = data->get_metadata_of_type(MetadataType::BATCH);
+        if (metadata.size() > 0)
+        {
+            BatchMetadataPtr batch_metadata = std::dynamic_pointer_cast<BatchMetadata>(metadata[0]);
+            if (batch_metadata != nullptr)
+            {
+                batch_index = batch_metadata->get_index();
+            }
+        }
+
+        uint64_t unique_id = isp_timestamp_ns + batch_index;
+        return unique_id;
+    }
+
+    void inference_tracing_begin(BufferPtr data)
+    {
+        std::string timestamp_str = generate_unique_timestamp_str(data);
+        uint64_t unique_id = get_unique_buffer_identifier(data);
+        m_tracing->trace_async_event_begin(unique_id, timestamp_str.c_str());
+    }
+
+    void inference_tracing_end(BufferPtr data)
+    {
+        uint64_t unique_id = get_unique_buffer_identifier(data);
+        m_tracing->trace_async_event_end(unique_id);
+    }
+
     /**
      * @brief Process the data in the buffer.
      * 
@@ -501,6 +557,7 @@ public:
             text_embeddings = read_text_features(path, feature_dim);
             init_done = true;
         }
+        inference_tracing_begin(data);
         m_debug_counters->increment_input_frames();
         
         // Wait and set scheduler threshold if dynamic thresholding used
@@ -518,7 +575,10 @@ public:
                     std::unique_lock<std::mutex> lock(m_active_jobs_mutex);
                     m_active_jobs_cv.wait(lock, [this] { return m_active_jobs == 0 || m_end_of_stream; });
                     if (m_end_of_stream)
+                    {
+                        inference_tracing_end(data);
                         return AppStatus::SUCCESS;
+                    }
                     m_configured_infer_model.set_scheduler_threshold(batch_metadata->get_total_size());
                 }
             }
@@ -536,12 +596,14 @@ public:
         std::unordered_map<std::string, BufferPtr> tensor_buffers;
         if (acquire_and_set_tensor_buffers(tensor_buffers) != AppStatus::SUCCESS)
         {
+            inference_tracing_end(data);
             return AppStatus::HAILORT_ERROR;
         }
 
         // Run the inference
         if (infer(data, tensor_buffers) != AppStatus::SUCCESS)
         {
+            inference_tracing_end(data);
             return AppStatus::HAILORT_ERROR;
         }
         
